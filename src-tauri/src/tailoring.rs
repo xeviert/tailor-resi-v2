@@ -65,6 +65,8 @@ pub struct TailorResponse {
     pub variant_slug: Option<String>,
     pub variant_json_path: Option<String>,
     pub docx_path: Option<String>,
+    pub pdf_path: Option<String>,
+    pub latest_pdf_path: Option<String>,
     pub report_json_path: Option<String>,
     pub validation_status: &'static str,
     pub fit_status: &'static str,
@@ -470,16 +472,31 @@ pub fn slugify(value: &str) -> String {
 }
 
 fn today_prefix() -> Result<String, TailoringError> {
-    let output = Command::new("powershell.exe")
-        .args(["-NoProfile", "-Command", "Get-Date -Format yyyy-MM-dd"])
-        .output()
-        .map_err(|error| TailoringError::Io(error.to_string()))?;
-    if !output.status.success() {
-        return Err(TailoringError::Io(
-            String::from_utf8_lossy(&output.stderr).trim().to_string(),
-        ));
-    }
-    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+    let seconds = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(|error| TailoringError::Io(error.to_string()))?
+        .as_secs() as i64;
+    let (year, month, day) = civil_date_from_days(seconds.div_euclid(86_400));
+    Ok(format!("{year:04}-{month:02}-{day:02}"))
+}
+
+// Gregorian civil date from days since 1970-01-01, adapted from Howard Hinnant's
+// public-domain algorithm. Keeping this local avoids a platform-specific shell call.
+fn civil_date_from_days(days_since_epoch: i64) -> (i64, u32, u32) {
+    let z = days_since_epoch + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365;
+    let year = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let day = doy - (153 * mp + 2) / 5 + 1;
+    let month = mp + if mp < 10 { 3 } else { -9 };
+    (
+        year + if month <= 2 { 1 } else { 0 },
+        month as u32,
+        day as u32,
+    )
 }
 
 pub fn write_variant_files(
@@ -524,9 +541,7 @@ pub fn render_and_validate(
         .join("scripts")
         .join("ResumeWorkbench.ps1");
 
-    let render = Command::new("powershell.exe")
-        .arg("-ExecutionPolicy")
-        .arg("Bypass")
+    let render = powershell_command()
         .arg("-File")
         .arg(&script)
         .arg("render")
@@ -542,9 +557,7 @@ pub fn render_and_validate(
         return Err(TailoringError::Render(command_output(&render)));
     }
 
-    let validate = Command::new("powershell.exe")
-        .arg("-ExecutionPolicy")
-        .arg("Bypass")
+    let validate = powershell_command()
         .arg("-File")
         .arg(&script)
         .arg("validate")
@@ -576,8 +589,8 @@ fn check_one_page_fit(
         .join("resume")
         .join("scripts")
         .join("ResumeWorkbench.ps1");
-    let output = Command::new("powershell.exe")
-        .args(["-ExecutionPolicy", "Bypass", "-File"])
+    let output = powershell_command()
+        .args(["-File"])
         .arg(script)
         .arg("fit")
         .arg("-Docx")
@@ -600,6 +613,21 @@ fn check_one_page_fit(
             page_counts: vec![count],
         }),
         _ => Err(TailoringError::Fit(command_output(&output))),
+    }
+}
+
+fn powershell_command() -> Command {
+    #[cfg(target_os = "windows")]
+    {
+        let mut command = Command::new("powershell.exe");
+        command.args(["-NoProfile", "-ExecutionPolicy", "Bypass"]);
+        command
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let mut command = Command::new("pwsh");
+        command.arg("-NoProfile");
+        command
     }
 }
 
@@ -633,19 +661,29 @@ pub async fn tailor_and_render(request: TailorRequest) -> Result<TailorResponse,
         let pdf_path = docx_path.with_extension("pdf");
         match check_one_page_fit(&root, &docx_path, &pdf_path) {
             Ok(page_count) => {
+                let latest_pdf_path = root
+                    .join("resume")
+                    .join("generated")
+                    .join(format!("Xevier_T_CV_{language}.pdf"));
+                std::fs::create_dir_all(latest_pdf_path.parent().unwrap())
+                    .map_err(|error| TailoringError::Io(error.to_string()))?;
+                std::fs::copy(&pdf_path, &latest_pdf_path)
+                    .map_err(|error| TailoringError::Io(error.to_string()))?;
                 return Ok(TailorResponse {
                     success: true,
                     tailoring_status: "completed",
                     variant_slug: Some(variant_slug),
                     variant_json_path: Some(relative_path(&root, &variant_json_path)),
                     docx_path: Some(relative_path(&root, &docx_path)),
+                    pdf_path: Some(relative_path(&root, &pdf_path)),
+                    latest_pdf_path: Some(relative_path(&root, &latest_pdf_path)),
                     report_json_path: Some(relative_path(&root, &report_json_path)),
                     validation_status: "passed",
                     fit_status: "passed",
                     page_count: Some(page_count),
                     report: Some(tailored.report),
                     error: None,
-                })
+                });
             }
             Err(TailoringError::OnePageFit {
                 page_counts: counts,
@@ -667,6 +705,8 @@ pub fn failed_response(error: String) -> TailorResponse {
         variant_slug: None,
         variant_json_path: None,
         docx_path: None,
+        pdf_path: None,
+        latest_pdf_path: None,
         report_json_path: None,
         validation_status: "not_run",
         fit_status: "not_run",
@@ -686,7 +726,7 @@ fn relative_path(root: &Path, path: &Path) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        build_tailoring_prompt, parse_tailored_resume_from_response, slugify,
+        build_tailoring_prompt, civil_date_from_days, parse_tailored_resume_from_response, slugify,
         validate_tailored_content, TailoringReport,
     };
     use crate::analysis::{JobAnalysis, KeywordSignal};
@@ -749,6 +789,12 @@ mod tests {
         assert!(prompt.contains("Do not invent"));
         assert!(prompt.contains("omitted_unsupported_keywords"));
         assert!(prompt.contains("Rust Engineer"));
+    }
+
+    #[test]
+    fn formats_epoch_day_without_a_shell_dependency() {
+        assert_eq!(civil_date_from_days(0), (1970, 1, 1));
+        assert_eq!(civil_date_from_days(20_000), (2024, 10, 4));
     }
 
     #[test]

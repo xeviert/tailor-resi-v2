@@ -6,7 +6,12 @@ use axum::{
     routing::{get, post},
     Json, Router,
 };
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
+use std::{
+    fs,
+    path::PathBuf,
+    time::{SystemTime, UNIX_EPOCH},
+};
 use tauri::{AppHandle, Emitter};
 use tower_http::cors::{AllowOrigin, CorsLayer};
 
@@ -32,6 +37,21 @@ struct AnalyzeResponse {
 #[derive(Clone)]
 struct AppState {
     app_handle: AppHandle,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct CapturedJob {
+    pub received_at_ms: u128,
+    pub payload: serde_json::Value,
+    pub parsed: serde_json::Value,
+}
+
+#[derive(Serialize)]
+struct CaptureResponse {
+    success: bool,
+    message: &'static str,
+    capture_path: String,
+    parsed: serde_json::Value,
 }
 
 fn collect_names(v: &serde_json::Value) -> Vec<String> {
@@ -276,12 +296,113 @@ pub(crate) fn parse_job_data(payload: &serde_json::Value) -> serde_json::Value {
     } else if source_url.contains("indeed.com") {
         parse_indeed(payload)
     } else {
-        serde_json::json!({ "domain": "unknown", "parsed": false, "raw": payload })
+        let job = &payload["json"];
+        let title = job["title"].as_str().unwrap_or("");
+        let description = job["description"]
+            .as_str()
+            .or_else(|| job["jobDescription"].as_str())
+            .unwrap_or("");
+        let company = job["company"]
+            .as_str()
+            .or_else(|| job["hiringOrganization"]["name"].as_str())
+            .unwrap_or("");
+        let mut warnings = Vec::new();
+        if title.is_empty() {
+            warnings.push("Missing field: title".to_string());
+        }
+        if description.is_empty() {
+            warnings.push("Missing field: description".to_string());
+        }
+        if company.is_empty() {
+            warnings.push("Missing field: company".to_string());
+        }
+        serde_json::json!({
+            "domain": "unknown",
+            "parsed": false,
+            "url": source_url,
+            "title": title,
+            "description": description,
+            "company": company,
+            "location": job["location"].as_str(),
+            "warnings": warnings,
+            "raw": payload
+        })
     }
+}
+
+fn capture_directory() -> Result<PathBuf, String> {
+    crate::tailoring::workspace_root()
+        .map(|root| root.join("data").join("job-captures"))
+        .map_err(|error| error.to_string())
+}
+
+pub fn persist_capture(payload: &serde_json::Value) -> Result<CapturedJob, String> {
+    let received_at_ms = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|error| error.to_string())?
+        .as_millis();
+    let captured = CapturedJob {
+        received_at_ms,
+        payload: payload.clone(),
+        parsed: parse_job_data(payload),
+    };
+    let directory = capture_directory()?;
+    fs::create_dir_all(&directory).map_err(|error| error.to_string())?;
+    let text = serde_json::to_string_pretty(&captured).map_err(|error| error.to_string())?;
+    fs::write(directory.join(format!("{received_at_ms}-job.json")), &text)
+        .map_err(|error| error.to_string())?;
+    fs::write(directory.join("latest.json"), format!("{text}\n"))
+        .map_err(|error| error.to_string())?;
+    Ok(captured)
+}
+
+pub fn load_latest_capture() -> Result<Option<CapturedJob>, String> {
+    let path = capture_directory()?.join("latest.json");
+    if !path.exists() {
+        return Ok(None);
+    }
+    let value: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(path).map_err(|error| error.to_string())?)
+            .map_err(|error| error.to_string())?;
+    if let Ok(capture) = serde_json::from_value::<CapturedJob>(value.clone()) {
+        return Ok(Some(capture));
+    }
+    // Accept captures created by the legacy PowerShell bridge.
+    Ok(Some(CapturedJob {
+        received_at_ms: 0,
+        parsed: parse_job_data(&value),
+        payload: value,
+    }))
 }
 
 async fn health_handler() -> Json<serde_json::Value> {
     Json(serde_json::json!({ "status": "ok", "app": "resi-tailor" }))
+}
+
+async fn capture_handler(
+    State(state): State<AppState>,
+    Json(payload): Json<serde_json::Value>,
+) -> (StatusCode, Json<serde_json::Value>) {
+    match persist_capture(&payload) {
+        Ok(captured) => {
+            if let Err(error) = state.app_handle.emit("job-data-received", &captured) {
+                eprintln!("[server] Failed to emit capture event: {error}");
+            }
+            (
+                StatusCode::OK,
+                Json(serde_json::json!(CaptureResponse {
+                    success: true,
+                    message: "Job data captured",
+                    capture_path: format!("data/job-captures/{}-job.json", captured.received_at_ms),
+                    parsed: captured.parsed,
+                })),
+            )
+        }
+        Err(error) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "success": false, "error": error })),
+        ),
+    }
 }
 
 async fn analyze_handler(
@@ -498,6 +619,7 @@ pub async fn start_server(app_handle: AppHandle) {
 
     let app = Router::new()
         .route("/health", get(health_handler))
+        .route("/captures", post(capture_handler))
         .route("/analyze", post(analyze_handler))
         .route("/tailor", post(tailor_handler))
         .route("/api/ollama", post(ollama_proxy_handler))
@@ -521,7 +643,7 @@ pub async fn start_server(app_handle: AppHandle) {
 
 #[cfg(test)]
 mod tests {
-    use super::parse_job_data;
+    use super::{parse_job_data, CapturedJob};
     use serde_json::json;
 
     #[test]
@@ -625,5 +747,18 @@ mod tests {
         assert_eq!(parsed["domain"], "unknown");
         assert_eq!(parsed["parsed"], false);
         assert_eq!(parsed["raw"], payload);
+    }
+
+    #[test]
+    fn captured_job_round_trips_with_normalized_data() {
+        let captured = CapturedJob {
+            received_at_ms: 42,
+            payload: json!({ "sourceUrl": "https://example.com" }),
+            parsed: json!({ "title": "Engineer" }),
+        };
+        let serialized = serde_json::to_string(&captured).unwrap();
+        let restored: CapturedJob = serde_json::from_str(&serialized).unwrap();
+        assert_eq!(restored.received_at_ms, 42);
+        assert_eq!(restored.parsed["title"], "Engineer");
     }
 }

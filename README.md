@@ -11,13 +11,21 @@ Resume Workbench is a local resume-tailoring workspace with three main pieces:
 
 1. The browser extension captures a job post.
 2. The Tauri bridge receives and normalizes the job data.
-3. The AI analysis layer extracts ATS keywords, skills, tools, responsibility phrases, and risk signals.
-4. The backend automatically uses that analysis to create a truthful tailored resume variant.
-5. The resume workbench renders and validates tailored DOCX output from locked templates.
+3. The desktop UI shows the normalized job details and waits for your chosen action.
+4. The UI runs AI analysis, truthful tailoring, DOCX validation, and a one-page PDF export.
+5. Each tailored variant is archived, while `resume/generated/Xevier_T_CV_en.pdf` or `Xevier_T_CV_fr.pdf` is replaced as the ready-to-upload local file.
 
-The browser extension still only sends data to `/analyze`; the backend handles
-tailoring, rendering, and validation locally. The extension UI does not display
-generated resume paths yet.
+The browser extension sends captures to `/captures`; this is deliberately separate
+from the legacy `/analyze` endpoint, which remains available for integrations that
+expect its automatic behavior. Uploading to third-party job forms remains a manual
+browser step: use the desktop app's Open PDF/Open folder actions to select the stable file.
+
+## Desktop UI and Linux
+
+Run `npm install`, then `npm run dev` alongside the Tauri development command. PDF
+generation requires LibreOffice. The renderer uses Windows PowerShell on Windows and
+PowerShell 7 (`pwsh`) on Linux; Linux Tauri builds also need the standard WebKitGTK
+system packages for the target distribution.
 
 ## AI Models
 

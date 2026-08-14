@@ -6,7 +6,7 @@ A browser extension that extracts job posting data (title, company, description)
 
 - **One-click extraction** - Click the extension icon, then "Extract Job" to grab data from the current page
 - **Heuristic selectors** - Works on generic job posting pages without site-specific templates
-- **Local backend integration** - Sends extracted data to `POST localhost:3000/analyze`
+- **Local backend integration** - Sends extracted data to `POST localhost:3000/captures`
 - **Error handling** - Graceful error messages when backend is unavailable
 
 ## Installation
@@ -21,7 +21,8 @@ A browser extension that extracts job posting data (title, company, description)
 1. Navigate to a job posting page (e.g., LinkedIn, Indeed, company careers page)
 2. Click the extension icon in the browser toolbar
 3. Click **Extract Job** in the popup
-4. Data is sent to `localhost:3000/analyze`
+4. Data is sent to `localhost:3000/captures` and appears in the desktop app.
+5. Choose EN or FR beside **Analyze & Generate PDF** in the desktop app to run the AI pipeline.
 
 ### Expected Backend Payload
 
@@ -64,7 +65,7 @@ After making changes to source files:
 
 ## Backend Requirement
 
-This extension expects a Tauri backend running on `localhost:3000` that handles `POST /analyze` requests.
+This extension expects a Tauri backend running on `localhost:3000` that handles `POST /captures` requests.
 
 The extension will display friendly error messages if the backend is not running.
 

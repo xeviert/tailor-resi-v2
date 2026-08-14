@@ -484,8 +484,8 @@ function Archive-Variant([string]$LangCode, [string]$VariantPath, [string]$Compa
 }
 
 function Export-Pdf([string]$DocxPath, [string]$OutDir) {
-  $knownPath = 'C:\Program Files\LibreOffice\program\soffice.com'
-  $soffice = if (Test-Path $knownPath) { Get-Item $knownPath } else { Get-Command soffice -ErrorAction SilentlyContinue }
+  $knownPath = if ([System.IO.Path]::DirectorySeparatorChar -eq '\') { 'C:\Program Files\LibreOffice\program\soffice.com' } else { $null }
+  $soffice = if ($knownPath -and (Test-Path $knownPath)) { Get-Item $knownPath } else { Get-Command soffice -ErrorAction SilentlyContinue }
   if ($null -eq $soffice) { $soffice = Get-Command libreoffice -ErrorAction SilentlyContinue }
   if ($null -eq $soffice) {
     throw 'LibreOffice is required for PDF export and one-page validation. Install LibreOffice or add soffice to PATH.'
@@ -500,7 +500,7 @@ function Export-Pdf([string]$DocxPath, [string]$OutDir) {
       "-env:UserInstallation=$profileUri", '--headless', '--convert-to', 'pdf', '--outdir', $OutDir, $DocxPath
     ) -PassThru -NoNewWindow
     if (!$process.WaitForExit(30000)) {
-      & taskkill.exe /PID $process.Id /T /F | Out-Null
+      Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
       throw 'LibreOffice PDF export timed out after 30 seconds.'
     }
     $exportedPdf = Join-Path $OutDir ([System.IO.Path]::GetFileNameWithoutExtension($DocxPath) + '.pdf')

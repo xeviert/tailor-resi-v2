@@ -6,6 +6,7 @@ use std::fmt;
 pub enum AppError {
     Io(String),
     Json(String),
+    Message(String),
 }
 
 impl fmt::Display for AppError {
@@ -13,6 +14,7 @@ impl fmt::Display for AppError {
         match self {
             AppError::Io(msg) => write!(f, "IO error: {}", msg),
             AppError::Json(msg) => write!(f, "JSON error: {}", msg),
+            AppError::Message(msg) => write!(f, "{}", msg),
         }
     }
 }

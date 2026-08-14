@@ -11,7 +11,13 @@ pub fn run() {
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_dialog::init())
-        .invoke_handler(tauri::generate_handler![commands::ping])
+        .invoke_handler(tauri::generate_handler![
+            commands::ping,
+            commands::get_latest_job,
+            commands::run_resume_pipeline,
+            commands::open_latest_pdf,
+            commands::reveal_latest_pdf
+        ])
         .setup(|app| {
             // Auto-open DevTools in debug builds
             #[cfg(debug_assertions)]

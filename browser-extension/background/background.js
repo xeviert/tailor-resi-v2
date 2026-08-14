@@ -2,7 +2,7 @@
 
 console.log('ResiTailor background service worker loaded');
 
-const BACKEND_URL = 'http://localhost:3000/analyze';
+const BACKEND_URL = 'http://localhost:3000/captures';
 const HEALTH_URL = 'http://localhost:3000/health';
 
 async function checkBackendHealth() {
