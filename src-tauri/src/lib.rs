@@ -2,6 +2,7 @@ mod analysis;
 mod commands;
 mod error;
 mod server;
+mod tailoring;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {

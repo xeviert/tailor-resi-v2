@@ -1,53 +1,30 @@
 # Resume Workbench
 
-This directory keeps the resume layout stable while allowing job-specific text edits.
+Resume Workbench is a local resume-tailoring workspace with three main pieces:
 
-## Files
+- `src-tauri/`: Tauri desktop bridge and AI job-analysis layer. It receives normalized job posts, extracts ATS-relevant keywords and signals, and emits the analysis for later use.
+- `browser-extension/`: browser extension that captures job-post data from supported job boards.
+- `resume/`: locked DOCX resume templates, editable JSON resume content, render scripts, generated documents, and archived variants.
+- `data/job-captures/`: runtime job-post capture payloads, including `latest.json`.
 
-- `source/`: untouched originals copied from the workspace root.
-- `templates/`: protected DOCX templates generated from the originals.
-- `content/base.en.json`: canonical English resume text.
-- `content/base.fr.json`: canonical French resume text.
-- `generated/`: base rendered outputs.
-- `variants/`: archived job-specific resume variants.
-- `scripts/ResumeWorkbench.ps1`: runnable workbench utility.
+## Current Flow
 
-Header/contact information, section headings, and education/formation are locked in
-the DOCX templates. Experience and skills are editable through JSON.
+1. The browser extension captures a job post.
+2. The Tauri bridge receives and normalizes the job data.
+3. The AI analysis layer extracts ATS keywords, skills, tools, responsibility phrases, and risk signals.
+4. The backend automatically uses that analysis to create a truthful tailored resume variant.
+5. The resume workbench renders and validates tailored DOCX output from locked templates.
 
-## Common Commands
+The browser extension still only sends data to `/analyze`; the backend handles
+tailoring, rendering, and validation locally. The extension UI does not display
+generated resume paths yet.
 
-Initialize templates and locked-section snapshots:
+## AI Models
 
-```powershell
-powershell.exe -ExecutionPolicy Bypass -File .\scripts\ResumeWorkbench.ps1 init
-```
+- `OPENAI_MODEL` controls job-post analysis and defaults to `gpt-5.6-luna`.
+- `OPENAI_TAILOR_MODEL` independently controls resume tailoring and defaults to `gpt-5.6-terra`.
+- `OPENAI_BASE_URL` can override the OpenAI API base URL.
 
-Render the base English resume:
+## Resume Documents
 
-```powershell
-powershell.exe -ExecutionPolicy Bypass -File .\scripts\ResumeWorkbench.ps1 render -Lang en
-```
-
-Render the base French resume:
-
-```powershell
-powershell.exe -ExecutionPolicy Bypass -File .\scripts\ResumeWorkbench.ps1 render -Lang fr
-```
-
-Validate that locked sections did not change:
-
-```powershell
-powershell.exe -ExecutionPolicy Bypass -File .\scripts\ResumeWorkbench.ps1 validate -Lang en -Docx .\generated\Xevier_T_CV_en.generated.docx
-```
-
-Archive and render a tailored variant:
-
-```powershell
-powershell.exe -ExecutionPolicy Bypass -File .\scripts\ResumeWorkbench.ps1 archive -Lang en -Variant .\content\some-variant.en.json -Company "Acme" -Role "AI Engineer"
-```
-
-## Tailoring Rule
-
-Do not edit `base.en.json` or `base.fr.json` for one job application. Copy the
-relevant base file, tailor the copy, then archive it as a variant.
+Detailed resume template and render instructions live in `resume/README.md`.

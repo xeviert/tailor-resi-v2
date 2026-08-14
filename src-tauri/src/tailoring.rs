@@ -1,0 +1,837 @@
+use crate::analysis::JobAnalysis;
+use reqwest::StatusCode;
+use serde::{Deserialize, Serialize};
+use std::{
+    collections::BTreeSet,
+    path::{Path, PathBuf},
+    process::Command,
+};
+
+#[derive(Clone, Debug)]
+pub struct TailoringConfig {
+    pub api_key: String,
+    pub model: String,
+    pub base_url: String,
+}
+
+impl TailoringConfig {
+    pub fn from_env() -> Option<Self> {
+        let api_key = std::env::var("OPENAI_API_KEY").ok()?;
+        let api_key = api_key.trim().to_string();
+        if api_key.is_empty() {
+            return None;
+        }
+
+        Some(Self {
+            api_key,
+            model: std::env::var("OPENAI_TAILOR_MODEL")
+                .ok()
+                .filter(|value| !value.trim().is_empty())
+                .unwrap_or_else(|| "gpt-5.6-terra".to_string()),
+            base_url: std::env::var("OPENAI_BASE_URL")
+                .ok()
+                .filter(|value| !value.trim().is_empty())
+                .unwrap_or_else(|| "https://api.openai.com/v1".to_string()),
+        })
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+pub struct TailoringReport {
+    pub covered_keywords: Vec<String>,
+    pub omitted_unsupported_keywords: Vec<String>,
+    pub changed_fields: Vec<String>,
+    pub safety_notes: Vec<String>,
+    pub estimated_ats_coverage_score: u8,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+pub struct TailoredResume {
+    pub content: serde_json::Value,
+    pub report: TailoringReport,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct TailorRequest {
+    pub language: String,
+    pub parsed: serde_json::Value,
+    pub analysis: JobAnalysis,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct TailorResponse {
+    pub success: bool,
+    pub tailoring_status: &'static str,
+    pub variant_slug: Option<String>,
+    pub variant_json_path: Option<String>,
+    pub docx_path: Option<String>,
+    pub report_json_path: Option<String>,
+    pub validation_status: &'static str,
+    pub fit_status: &'static str,
+    pub page_count: Option<u32>,
+    pub report: Option<TailoringReport>,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum TailoringError {
+    #[error("Unsupported resume language: {0}")]
+    UnsupportedLanguage(String),
+    #[error("OpenAI request failed: {0}")]
+    Request(String),
+    #[error("OpenAI returned HTTP {status}: {body}")]
+    Http { status: StatusCode, body: String },
+    #[error("OpenAI response did not contain structured output text")]
+    MissingOutputText,
+    #[error("OpenAI tailoring JSON was invalid: {0}")]
+    InvalidJson(String),
+    #[error("Tailored resume failed safety validation: {0}")]
+    InvalidTailoredContent(String),
+    #[error("Could not locate repository root with resume/content")]
+    MissingWorkspaceRoot,
+    #[error("File operation failed: {0}")]
+    Io(String),
+    #[error("Resume render failed: {0}")]
+    Render(String),
+    #[error("Resume validation failed: {0}")]
+    Validation(String),
+    #[error("Resume did not fit on one page after {attempts} attempts: {page_counts:?}")]
+    OnePageFit {
+        attempts: usize,
+        page_counts: Vec<u32>,
+    },
+    #[error("Resume one-page fit check failed: {0}")]
+    Fit(String),
+}
+
+pub fn build_tailoring_prompt(
+    language: &str,
+    parsed_job: &serde_json::Value,
+    analysis: &JobAnalysis,
+    base_resume: &serde_json::Value,
+    concise: bool,
+) -> String {
+    let parsed_job = serde_json::to_string(parsed_job).unwrap_or_else(|_| "{}".to_string());
+    let analysis = serde_json::to_string(analysis).unwrap_or_else(|_| "{}".to_string());
+    let base_resume = serde_json::to_string(base_resume).unwrap_or_else(|_| "{}".to_string());
+
+    let concise_instruction = if concise {
+        "The preceding attempt overflowed to a second page. Keep every bullet and every factual claim, but rewrite the editable text more compactly: remove repetition, use concise verbs, and prefer compact ATS terminology. Do not shorten by deleting responsibilities or achievements.\n\n"
+    } else {
+        ""
+    };
+
+    format!(
+        "Tailor this {language} resume JSON for maximum truthful ATS alignment.\n\
+         Return only JSON matching the schema. Preserve the input resume shape exactly.\n\
+         Rewrite only experience bullet text and skills strings.\n\
+         Do not change meta, company names, locations, titles, dates, job order, number of jobs, number of bullets, or skill keys.\n\
+         Aggressively incorporate ATS keywords, tools, responsibility phrases, and domain wording when the base resume supports them.\n\
+         Do not invent credentials, employers, tools, metrics, responsibilities, education, certifications, or experience.\n\
+         Put important job keywords without resume evidence into omitted_unsupported_keywords instead of adding them to the resume.\n\
+         Keep each rewritten bullet close to the original length so the locked DOCX layout remains stable.\n\n\
+         {concise_instruction}\
+         Normalized job JSON:\n{parsed_job}\n\n\
+         ATS analysis JSON:\n{analysis}\n\n\
+         Base resume JSON:\n{base_resume}"
+    )
+}
+
+fn resume_content_schema() -> serde_json::Value {
+    serde_json::json!({
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["meta", "experience", "skills"],
+        "properties": {
+            "meta": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["language", "type", "template"],
+                "properties": {
+                    "language": { "type": "string" },
+                    "type": { "type": "string" },
+                    "template": { "type": "string" }
+                }
+            },
+            "experience": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["company", "location", "title", "dates", "bullets"],
+                    "properties": {
+                        "company": { "type": "string" },
+                        "location": { "type": "string" },
+                        "title": { "type": "string" },
+                        "dates": { "type": "string" },
+                        "bullets": { "type": "array", "items": { "type": "string" } }
+                    }
+                }
+            },
+            "skills": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["frontend", "architecture_backend", "ai_data", "testing", "devops", "tools"],
+                "properties": {
+                    "frontend": { "type": "string" },
+                    "architecture_backend": { "type": "string" },
+                    "ai_data": { "type": "string" },
+                    "testing": { "type": "string" },
+                    "devops": { "type": "string" },
+                    "tools": { "type": "string" }
+                }
+            }
+        }
+    })
+}
+
+fn tailoring_schema() -> serde_json::Value {
+    serde_json::json!({
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["content", "report"],
+        "properties": {
+            "content": resume_content_schema(),
+            "report": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                    "covered_keywords",
+                    "omitted_unsupported_keywords",
+                    "changed_fields",
+                    "safety_notes",
+                    "estimated_ats_coverage_score"
+                ],
+                "properties": {
+                    "covered_keywords": { "type": "array", "items": { "type": "string" } },
+                    "omitted_unsupported_keywords": { "type": "array", "items": { "type": "string" } },
+                    "changed_fields": { "type": "array", "items": { "type": "string" } },
+                    "safety_notes": { "type": "array", "items": { "type": "string" } },
+                    "estimated_ats_coverage_score": { "type": "integer", "minimum": 0, "maximum": 100 }
+                }
+            }
+        }
+    })
+}
+
+pub fn build_tailoring_request(
+    model: &str,
+    language: &str,
+    parsed_job: &serde_json::Value,
+    analysis: &JobAnalysis,
+    base_resume: &serde_json::Value,
+    concise: bool,
+) -> serde_json::Value {
+    serde_json::json!({
+        "model": model,
+        "input": [
+            {
+                "role": "system",
+                "content": "You rewrite resume JSON for ATS alignment. You must be truthful, evidence-bound, and preserve all locked layout constraints."
+            },
+            {
+                "role": "user",
+                "content": build_tailoring_prompt(language, parsed_job, analysis, base_resume, concise)
+            }
+        ],
+        "text": {
+            "format": {
+                "type": "json_schema",
+                "name": "tailored_resume",
+                "strict": true,
+                "schema": tailoring_schema()
+            }
+        }
+    })
+}
+
+pub async fn tailor_resume(
+    config: &TailoringConfig,
+    language: &str,
+    parsed_job: &serde_json::Value,
+    analysis: &JobAnalysis,
+    base_resume: &serde_json::Value,
+    concise: bool,
+) -> Result<TailoredResume, TailoringError> {
+    validate_language(language)?;
+    let client = reqwest::Client::new();
+    let request_body = build_tailoring_request(
+        &config.model,
+        language,
+        parsed_job,
+        analysis,
+        base_resume,
+        concise,
+    );
+    let url = format!("{}/responses", config.base_url.trim_end_matches('/'));
+
+    let response = client
+        .post(url)
+        .bearer_auth(&config.api_key)
+        .json(&request_body)
+        .send()
+        .await
+        .map_err(|error| TailoringError::Request(error.to_string()))?;
+
+    let status = response.status();
+    let body = response
+        .text()
+        .await
+        .map_err(|error| TailoringError::Request(error.to_string()))?;
+
+    if !status.is_success() {
+        return Err(TailoringError::Http { status, body });
+    }
+
+    parse_tailored_resume_from_response(&body)
+}
+
+pub fn parse_tailored_resume_from_response(body: &str) -> Result<TailoredResume, TailoringError> {
+    let response: serde_json::Value = serde_json::from_str(body)
+        .map_err(|error| TailoringError::InvalidJson(error.to_string()))?;
+    let text = find_output_text(&response).ok_or(TailoringError::MissingOutputText)?;
+    serde_json::from_str(text).map_err(|error| TailoringError::InvalidJson(error.to_string()))
+}
+
+fn find_output_text(response: &serde_json::Value) -> Option<&str> {
+    response["output"].as_array()?.iter().find_map(|item| {
+        item["content"].as_array()?.iter().find_map(|content| {
+            if content["type"].as_str() == Some("output_text") {
+                content["text"].as_str()
+            } else {
+                None
+            }
+        })
+    })
+}
+
+pub fn validate_tailored_content(
+    language: &str,
+    base: &serde_json::Value,
+    tailored: &serde_json::Value,
+) -> Result<(), TailoringError> {
+    validate_language(language)?;
+
+    if base["meta"]["language"] != tailored["meta"]["language"] {
+        return invalid("meta.language changed");
+    }
+    if tailored["meta"]["language"].as_str() != Some(language) {
+        return invalid("tailored meta.language does not match request language");
+    }
+    if base["meta"]["type"] != tailored["meta"]["type"] {
+        return invalid("meta.type changed");
+    }
+    if base["meta"]["template"] != tailored["meta"]["template"] {
+        return invalid("meta.template changed");
+    }
+
+    let base_experience = base["experience"]
+        .as_array()
+        .ok_or_else(|| invalid_message("base experience is not an array"))?;
+    let tailored_experience = tailored["experience"]
+        .as_array()
+        .ok_or_else(|| invalid_message("tailored experience is not an array"))?;
+
+    if base_experience.len() != tailored_experience.len() {
+        return invalid("experience job count changed");
+    }
+
+    for (job_index, (base_job, tailored_job)) in base_experience
+        .iter()
+        .zip(tailored_experience.iter())
+        .enumerate()
+    {
+        for field in ["company", "location", "title", "dates"] {
+            if base_job[field] != tailored_job[field] {
+                return invalid(&format!("experience.{job_index}.{field} changed"));
+            }
+        }
+
+        let base_bullets = base_job["bullets"]
+            .as_array()
+            .ok_or_else(|| invalid_message("base bullets are not an array"))?;
+        let tailored_bullets = tailored_job["bullets"]
+            .as_array()
+            .ok_or_else(|| invalid_message("tailored bullets are not an array"))?;
+
+        if base_bullets.len() != tailored_bullets.len() {
+            return invalid(&format!("experience.{job_index}.bullets count changed"));
+        }
+        if tailored_bullets.iter().any(|bullet| {
+            bullet
+                .as_str()
+                .map(str::trim)
+                .map(str::is_empty)
+                .unwrap_or(true)
+        }) {
+            return invalid(&format!(
+                "experience.{job_index}.bullets contains empty text"
+            ));
+        }
+    }
+
+    let base_keys = object_keys(&base["skills"])?;
+    let tailored_keys = object_keys(&tailored["skills"])?;
+    if base_keys != tailored_keys {
+        return invalid("skills keys changed");
+    }
+    for key in tailored_keys {
+        if tailored["skills"][&key]
+            .as_str()
+            .map(str::trim)
+            .map(str::is_empty)
+            .unwrap_or(true)
+        {
+            return invalid(&format!("skills.{key} is empty"));
+        }
+    }
+
+    Ok(())
+}
+
+fn object_keys(value: &serde_json::Value) -> Result<BTreeSet<String>, TailoringError> {
+    let object = value
+        .as_object()
+        .ok_or_else(|| invalid_message("value is not an object"))?;
+    Ok(object.keys().cloned().collect())
+}
+
+fn validate_language(language: &str) -> Result<(), TailoringError> {
+    match language {
+        "en" | "fr" => Ok(()),
+        other => Err(TailoringError::UnsupportedLanguage(other.to_string())),
+    }
+}
+
+fn invalid<T>(message: &str) -> Result<T, TailoringError> {
+    Err(invalid_message(message))
+}
+
+fn invalid_message(message: &str) -> TailoringError {
+    TailoringError::InvalidTailoredContent(message.to_string())
+}
+
+pub fn workspace_root() -> Result<PathBuf, TailoringError> {
+    let current = std::env::current_dir().map_err(|error| TailoringError::Io(error.to_string()))?;
+    for candidate in current.ancestors() {
+        if candidate.join("resume").join("content").is_dir() {
+            return Ok(candidate.to_path_buf());
+        }
+    }
+    Err(TailoringError::MissingWorkspaceRoot)
+}
+
+pub fn load_base_resume(root: &Path, language: &str) -> Result<serde_json::Value, TailoringError> {
+    validate_language(language)?;
+    let path = root
+        .join("resume")
+        .join("content")
+        .join(format!("base.{language}.json"));
+    let text =
+        std::fs::read_to_string(&path).map_err(|error| TailoringError::Io(error.to_string()))?;
+    serde_json::from_str(&text).map_err(|error| TailoringError::InvalidJson(error.to_string()))
+}
+
+pub fn company_role_slug(
+    parsed_job: &serde_json::Value,
+    analysis: &JobAnalysis,
+    language: &str,
+) -> String {
+    let company = parsed_job["company"].as_str().unwrap_or("unknown-company");
+    let role = if analysis.role_target.trim().is_empty() {
+        parsed_job["title"].as_str().unwrap_or("unknown-role")
+    } else {
+        analysis.role_target.as_str()
+    };
+    let raw = format!("{company}-{role}-{language}");
+    slugify(&raw)
+}
+
+pub fn slugify(value: &str) -> String {
+    let mut slug = String::new();
+    let mut previous_dash = false;
+
+    for ch in value.chars() {
+        if ch.is_ascii_alphanumeric() {
+            slug.push(ch.to_ascii_lowercase());
+            previous_dash = false;
+        } else if !previous_dash {
+            slug.push('-');
+            previous_dash = true;
+        }
+    }
+
+    let slug = slug.trim_matches('-').to_string();
+    if slug.is_empty() {
+        "tailored-resume".to_string()
+    } else {
+        slug
+    }
+}
+
+fn today_prefix() -> Result<String, TailoringError> {
+    let output = Command::new("powershell.exe")
+        .args(["-NoProfile", "-Command", "Get-Date -Format yyyy-MM-dd"])
+        .output()
+        .map_err(|error| TailoringError::Io(error.to_string()))?;
+    if !output.status.success() {
+        return Err(TailoringError::Io(
+            String::from_utf8_lossy(&output.stderr).trim().to_string(),
+        ));
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+}
+
+pub fn write_variant_files(
+    root: &Path,
+    language: &str,
+    parsed_job: &serde_json::Value,
+    analysis: &JobAnalysis,
+    tailored: &TailoredResume,
+) -> Result<(String, PathBuf, PathBuf, PathBuf), TailoringError> {
+    let variant_slug = format!(
+        "{}-{}",
+        today_prefix()?,
+        company_role_slug(parsed_job, analysis, language)
+    );
+    let variant_dir = root.join("resume").join("variants").join(&variant_slug);
+    std::fs::create_dir_all(&variant_dir).map_err(|error| TailoringError::Io(error.to_string()))?;
+
+    let variant_json_path = variant_dir.join("variant.json");
+    let report_json_path = variant_dir.join("tailoring-report.json");
+    let docx_path = variant_dir.join(format!("Xevier_T_CV_{language}.{variant_slug}.docx"));
+
+    write_json(&variant_json_path, &tailored.content)?;
+    write_json(&report_json_path, &tailored.report)?;
+
+    Ok((variant_slug, variant_json_path, report_json_path, docx_path))
+}
+
+fn write_json<T: Serialize>(path: &Path, value: &T) -> Result<(), TailoringError> {
+    let json = serde_json::to_string_pretty(value)
+        .map_err(|error| TailoringError::InvalidJson(error.to_string()))?;
+    std::fs::write(path, format!("{json}\n")).map_err(|error| TailoringError::Io(error.to_string()))
+}
+
+pub fn render_and_validate(
+    root: &Path,
+    language: &str,
+    variant_json_path: &Path,
+    docx_path: &Path,
+) -> Result<(), TailoringError> {
+    let script = root
+        .join("resume")
+        .join("scripts")
+        .join("ResumeWorkbench.ps1");
+
+    let render = Command::new("powershell.exe")
+        .arg("-ExecutionPolicy")
+        .arg("Bypass")
+        .arg("-File")
+        .arg(&script)
+        .arg("render")
+        .arg("-Lang")
+        .arg(language)
+        .arg("-Content")
+        .arg(variant_json_path)
+        .arg("-Out")
+        .arg(docx_path)
+        .output()
+        .map_err(|error| TailoringError::Render(error.to_string()))?;
+    if !render.status.success() {
+        return Err(TailoringError::Render(command_output(&render)));
+    }
+
+    let validate = Command::new("powershell.exe")
+        .arg("-ExecutionPolicy")
+        .arg("Bypass")
+        .arg("-File")
+        .arg(&script)
+        .arg("validate")
+        .arg("-Lang")
+        .arg(language)
+        .arg("-Docx")
+        .arg(docx_path)
+        .output()
+        .map_err(|error| TailoringError::Validation(error.to_string()))?;
+    if !validate.status.success() {
+        return Err(TailoringError::Validation(command_output(&validate)));
+    }
+
+    Ok(())
+}
+
+fn command_output(output: &std::process::Output) -> String {
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    format!("{}{}", stdout, stderr).trim().to_string()
+}
+
+fn check_one_page_fit(
+    root: &Path,
+    docx_path: &Path,
+    pdf_path: &Path,
+) -> Result<u32, TailoringError> {
+    let script = root
+        .join("resume")
+        .join("scripts")
+        .join("ResumeWorkbench.ps1");
+    let output = Command::new("powershell.exe")
+        .args(["-ExecutionPolicy", "Bypass", "-File"])
+        .arg(script)
+        .arg("fit")
+        .arg("-Docx")
+        .arg(docx_path)
+        .arg("-Out")
+        .arg(pdf_path)
+        .output()
+        .map_err(|error| TailoringError::Fit(error.to_string()))?;
+    let text = String::from_utf8_lossy(&output.stdout);
+    let result = text
+        .lines()
+        .find_map(|line| serde_json::from_str::<serde_json::Value>(line).ok());
+    let page_count = result
+        .and_then(|value| value["page_count"].as_u64())
+        .map(|count| count as u32);
+    match (output.status.success(), page_count) {
+        (true, Some(1)) => Ok(1),
+        (false, Some(count)) => Err(TailoringError::OnePageFit {
+            attempts: 1,
+            page_counts: vec![count],
+        }),
+        _ => Err(TailoringError::Fit(command_output(&output))),
+    }
+}
+
+pub async fn tailor_and_render(request: TailorRequest) -> Result<TailorResponse, TailoringError> {
+    let language = request.language.as_str();
+    let root = workspace_root()?;
+    let base_resume = load_base_resume(&root, language)?;
+    let config = TailoringConfig::from_env().ok_or_else(|| {
+        TailoringError::Request("OPENAI_API_KEY is required for tailoring".to_string())
+    })?;
+    let mut page_counts = Vec::new();
+    for attempt in 0..3 {
+        let tailored = tailor_resume(
+            &config,
+            language,
+            &request.parsed,
+            &request.analysis,
+            &base_resume,
+            attempt > 0,
+        )
+        .await?;
+        validate_tailored_content(language, &base_resume, &tailored.content)?;
+        let (variant_slug, variant_json_path, report_json_path, docx_path) = write_variant_files(
+            &root,
+            language,
+            &request.parsed,
+            &request.analysis,
+            &tailored,
+        )?;
+        render_and_validate(&root, language, &variant_json_path, &docx_path)?;
+        let pdf_path = docx_path.with_extension("pdf");
+        match check_one_page_fit(&root, &docx_path, &pdf_path) {
+            Ok(page_count) => {
+                return Ok(TailorResponse {
+                    success: true,
+                    tailoring_status: "completed",
+                    variant_slug: Some(variant_slug),
+                    variant_json_path: Some(relative_path(&root, &variant_json_path)),
+                    docx_path: Some(relative_path(&root, &docx_path)),
+                    report_json_path: Some(relative_path(&root, &report_json_path)),
+                    validation_status: "passed",
+                    fit_status: "passed",
+                    page_count: Some(page_count),
+                    report: Some(tailored.report),
+                    error: None,
+                })
+            }
+            Err(TailoringError::OnePageFit {
+                page_counts: counts,
+                ..
+            }) => page_counts.extend(counts),
+            Err(error) => return Err(error),
+        }
+    }
+    Err(TailoringError::OnePageFit {
+        attempts: 3,
+        page_counts,
+    })
+}
+
+pub fn failed_response(error: String) -> TailorResponse {
+    TailorResponse {
+        success: false,
+        tailoring_status: "failed",
+        variant_slug: None,
+        variant_json_path: None,
+        docx_path: None,
+        report_json_path: None,
+        validation_status: "not_run",
+        fit_status: "not_run",
+        page_count: None,
+        report: None,
+        error: Some(error),
+    }
+}
+
+fn relative_path(root: &Path, path: &Path) -> String {
+    path.strip_prefix(root)
+        .unwrap_or(path)
+        .to_string_lossy()
+        .replace('\\', "/")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        build_tailoring_prompt, parse_tailored_resume_from_response, slugify,
+        validate_tailored_content, TailoringReport,
+    };
+    use crate::analysis::{JobAnalysis, KeywordSignal};
+    use serde_json::json;
+
+    fn analysis() -> JobAnalysis {
+        JobAnalysis {
+            role_target: "Rust Engineer".to_string(),
+            seniority: "Senior".to_string(),
+            core_keywords: vec![KeywordSignal {
+                term: "Rust".to_string(),
+                category: "technology".to_string(),
+                importance: 5,
+                evidence: "Job asks for Rust".to_string(),
+            }],
+            required_skills: vec!["Rust".to_string()],
+            preferred_skills: vec!["Kubernetes".to_string()],
+            tools_and_platforms: vec!["Axum".to_string()],
+            domain_terms: vec!["API development".to_string()],
+            responsibility_phrases: vec!["Build APIs".to_string()],
+            achievement_angles: vec!["Reliable services".to_string()],
+            ats_phrase_bank: vec!["Rust API development".to_string()],
+            must_not_claim_without_evidence: vec!["Kubernetes".to_string()],
+            summary: "Emphasize Rust API work.".to_string(),
+        }
+    }
+
+    fn base_resume() -> serde_json::Value {
+        json!({
+            "meta": { "language": "en", "type": "base", "template": "Xevier_T_CV_en.template.docx" },
+            "experience": [{
+                "company": "Acme",
+                "location": "Remote",
+                "title": "Engineer",
+                "dates": "2024 - Present",
+                "bullets": ["Built APIs.", "Improved reliability."]
+            }],
+            "skills": {
+                "frontend": "Frontend: React",
+                "architecture_backend": "Architecture & Backend: Rust, APIs",
+                "ai_data": "AI & Data: OpenAI",
+                "testing": "Testing: Vitest",
+                "devops": "DevOps: Docker",
+                "tools": "Tools: Git"
+            }
+        })
+    }
+
+    #[test]
+    fn tailoring_prompt_contains_constraints() {
+        let prompt = build_tailoring_prompt(
+            "en",
+            &json!({"title": "Rust Engineer"}),
+            &analysis(),
+            &base_resume(),
+            false,
+        );
+
+        assert!(prompt.contains("Rewrite only experience bullet text and skills strings"));
+        assert!(prompt.contains("Do not invent"));
+        assert!(prompt.contains("omitted_unsupported_keywords"));
+        assert!(prompt.contains("Rust Engineer"));
+    }
+
+    #[test]
+    fn concise_retry_prompt_preserves_content_constraints() {
+        let prompt = build_tailoring_prompt("en", &json!({}), &analysis(), &base_resume(), true);
+        assert!(prompt.contains("overflowed to a second page"));
+        assert!(prompt.contains("Do not shorten by deleting responsibilities"));
+    }
+
+    #[test]
+    fn parses_tailored_resume_response() {
+        let tailored = json!({
+            "content": base_resume(),
+            "report": TailoringReport {
+                covered_keywords: vec!["Rust".to_string()],
+                omitted_unsupported_keywords: vec!["Kubernetes".to_string()],
+                changed_fields: vec!["skills.architecture_backend".to_string()],
+                safety_notes: vec!["No unsupported claims added.".to_string()],
+                estimated_ats_coverage_score: 82,
+            }
+        });
+        let body = json!({
+            "output": [{
+                "type": "message",
+                "content": [{
+                    "type": "output_text",
+                    "text": serde_json::to_string(&tailored).unwrap()
+                }]
+            }]
+        })
+        .to_string();
+
+        let parsed = parse_tailored_resume_from_response(&body).unwrap();
+        assert_eq!(parsed.report.estimated_ats_coverage_score, 82);
+        assert_eq!(parsed.report.omitted_unsupported_keywords[0], "Kubernetes");
+    }
+
+    #[test]
+    fn validation_rejects_changed_locked_job_fields() {
+        let base = base_resume();
+        let mut tailored = base.clone();
+        tailored["experience"][0]["company"] = json!("Different");
+
+        let err = validate_tailored_content("en", &base, &tailored).unwrap_err();
+        assert!(err.to_string().contains("company changed"));
+    }
+
+    #[test]
+    fn validation_rejects_changed_meta_type() {
+        let base = base_resume();
+        let mut tailored = base.clone();
+        tailored["meta"]["type"] = json!("tailored");
+
+        let err = validate_tailored_content("en", &base, &tailored).unwrap_err();
+        assert!(err.to_string().contains("meta.type changed"));
+    }
+
+    #[test]
+    fn validation_rejects_changed_bullet_count() {
+        let base = base_resume();
+        let mut tailored = base.clone();
+        tailored["experience"][0]["bullets"] = json!(["Only one bullet."]);
+
+        let err = validate_tailored_content("en", &base, &tailored).unwrap_err();
+        assert!(err.to_string().contains("bullets count changed"));
+    }
+
+    #[test]
+    fn validation_accepts_bullet_and_skill_rewrites() {
+        let base = base_resume();
+        let mut tailored = base.clone();
+        tailored["experience"][0]["bullets"][0] = json!("Built Rust APIs for reliable services.");
+        tailored["skills"]["architecture_backend"] =
+            json!("Architecture & Backend: Rust, API Design, Axum");
+
+        validate_tailored_content("en", &base, &tailored).unwrap();
+    }
+
+    #[test]
+    fn slugify_keeps_paths_safe() {
+        assert_eq!(
+            slugify("Acme AI / Senior Rust Engineer en"),
+            "acme-ai-senior-rust-engineer-en"
+        );
+    }
+}

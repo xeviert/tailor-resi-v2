@@ -1,5 +1,5 @@
 param(
-  [Parameter(Mandatory=$true)][ValidateSet('init','render','validate','archive','pdf')] [string]$Command,
+  [Parameter(Mandatory=$true)][ValidateSet('init','render','validate','fit','archive','pdf')] [string]$Command,
   [ValidateSet('en','fr')] [string]$Lang,
   [string]$Content,
   [string]$Out,
@@ -484,14 +484,54 @@ function Archive-Variant([string]$LangCode, [string]$VariantPath, [string]$Compa
 }
 
 function Export-Pdf([string]$DocxPath, [string]$OutDir) {
-  $soffice = Get-Command soffice -ErrorAction SilentlyContinue
+  $knownPath = 'C:\Program Files\LibreOffice\program\soffice.com'
+  $soffice = if (Test-Path $knownPath) { Get-Item $knownPath } else { Get-Command soffice -ErrorAction SilentlyContinue }
   if ($null -eq $soffice) { $soffice = Get-Command libreoffice -ErrorAction SilentlyContinue }
   if ($null -eq $soffice) {
-    Write-Host '[pdf] LibreOffice not found; skipped PDF export'
-    return
+    throw 'LibreOffice is required for PDF export and one-page validation. Install LibreOffice or add soffice to PATH.'
   }
+  $sofficePath = if ($soffice.PSObject.Properties['Source'] -and $soffice.Source) { $soffice.Source } else { $soffice.FullName }
   New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
-  & $soffice.Source --headless --convert-to pdf --outdir $OutDir $DocxPath
+  $profile = Join-Path ([System.IO.Path]::GetTempPath()) ("resume_lo_profile_" + [guid]::NewGuid())
+  New-Item -ItemType Directory -Force -Path $profile | Out-Null
+  try {
+    $profileUri = 'file:///' + ($profile -replace '\\','/')
+    $process = Start-Process -FilePath $sofficePath -ArgumentList @(
+      "-env:UserInstallation=$profileUri", '--headless', '--convert-to', 'pdf', '--outdir', $OutDir, $DocxPath
+    ) -PassThru -NoNewWindow
+    if (!$process.WaitForExit(30000)) {
+      & taskkill.exe /PID $process.Id /T /F | Out-Null
+      throw 'LibreOffice PDF export timed out after 30 seconds.'
+    }
+    $exportedPdf = Join-Path $OutDir ([System.IO.Path]::GetFileNameWithoutExtension($DocxPath) + '.pdf')
+    if (!(Test-Path $exportedPdf)) { throw 'LibreOffice PDF export completed without producing a PDF.' }
+  } finally {
+    if (Test-Path $profile) { Remove-Item -LiteralPath $profile -Recurse -Force }
+  }
+}
+
+function Get-PdfPageCount([string]$PdfPath) {
+  if (!(Test-Path $PdfPath)) { throw "PDF export did not create $PdfPath" }
+  $text = [System.Text.Encoding]::GetEncoding(28591).GetString([System.IO.File]::ReadAllBytes($PdfPath))
+  return [regex]::Matches($text, '/Type\s*/Page\b').Count
+}
+
+function Test-OnePageFit([string]$DocxPath, [string]$PdfPath) {
+  $pdfDir = Split-Path -Parent $PdfPath
+  Export-Pdf $DocxPath $pdfDir
+  $exportedPdf = Join-Path $pdfDir ([System.IO.Path]::GetFileNameWithoutExtension($DocxPath) + '.pdf')
+  if ($exportedPdf -ne $PdfPath) {
+    Move-Item -LiteralPath $exportedPdf -Destination $PdfPath -Force
+  }
+  $pageCount = Get-PdfPageCount $PdfPath
+  $result = [ordered]@{
+    docx_path = $DocxPath
+    pdf_path = $PdfPath
+    page_count = $pageCount
+    fit_status = if ($pageCount -eq 1) { 'passed' } else { 'failed' }
+  }
+  $result | ConvertTo-Json -Compress
+  if ($pageCount -ne 1) { exit 2 }
 }
 
 switch ($Command) {
@@ -503,6 +543,11 @@ switch ($Command) {
   'validate' {
     if (!$Lang -or !$Docx) { throw '-Lang and -Docx are required for validate' }
     Validate-Resume $Lang $Docx
+  }
+  'fit' {
+    if (!$Docx) { throw '-Docx is required for fit' }
+    if (!$Out) { $Out = (Join-Path (Split-Path -Parent $Docx) ([System.IO.Path]::GetFileNameWithoutExtension($Docx) + '.pdf')) }
+    Test-OnePageFit $Docx $Out
   }
   'archive' {
     if (!$Lang -or !$Variant -or !$Company -or !$Role) { throw '-Lang, -Variant, -Company, and -Role are required for archive' }

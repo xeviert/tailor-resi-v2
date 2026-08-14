@@ -1,4 +1,5 @@
 use crate::analysis::{analyze_job, AnalysisConfig, JobAnalysis};
+use crate::tailoring::{failed_response, tailor_and_render, TailorRequest, TailorResponse};
 use axum::{
     extract::State,
     http::{Method, StatusCode},
@@ -17,6 +18,15 @@ struct AnalyzeResponse {
     analysis_status: &'static str,
     analysis: Option<JobAnalysis>,
     analysis_error: Option<String>,
+    tailoring_status: &'static str,
+    variant_slug: Option<String>,
+    variant_json_path: Option<String>,
+    docx_path: Option<String>,
+    report_json_path: Option<String>,
+    validation_status: &'static str,
+    fit_status: &'static str,
+    page_count: Option<u32>,
+    tailoring_error: Option<String>,
 }
 
 #[derive(Clone)]
@@ -307,6 +317,62 @@ async fn analyze_handler(
         None => ("skipped_no_api_key", None, None),
     };
 
+    let (
+        tailoring_status,
+        variant_slug,
+        variant_json_path,
+        docx_path,
+        report_json_path,
+        validation_status,
+        fit_status,
+        page_count,
+        tailoring_error,
+    ) = match analysis.clone() {
+        Some(analysis) => {
+            let request = TailorRequest {
+                language: "en".to_string(),
+                parsed: parsed.clone(),
+                analysis,
+            };
+            match tailor_and_render(request).await {
+                Ok(response) => {
+                    if let Err(e) = state.app_handle.emit("resume-tailored", &response) {
+                        eprintln!("[server] Failed to emit resume-tailored event: {e}");
+                    }
+                    (
+                        response.tailoring_status,
+                        response.variant_slug,
+                        response.variant_json_path,
+                        response.docx_path,
+                        response.report_json_path,
+                        response.validation_status,
+                        response.fit_status,
+                        response.page_count,
+                        response.error,
+                    )
+                }
+                Err(error) => {
+                    let message = error.to_string();
+                    eprintln!("[tailoring] {message}");
+                    (
+                        "failed",
+                        None,
+                        None,
+                        None,
+                        None,
+                        "not_run",
+                        "not_run",
+                        None,
+                        Some(message),
+                    )
+                }
+            }
+        }
+        None => (
+            "not_run", None, None, None, None, "not_run", "not_run", None, None,
+        ),
+    };
+
     (
         StatusCode::OK,
         Json(AnalyzeResponse {
@@ -316,8 +382,36 @@ async fn analyze_handler(
             analysis_status,
             analysis,
             analysis_error,
+            tailoring_status,
+            variant_slug,
+            variant_json_path,
+            docx_path,
+            report_json_path,
+            validation_status,
+            fit_status,
+            page_count,
+            tailoring_error,
         }),
     )
+}
+
+async fn tailor_handler(
+    State(state): State<AppState>,
+    Json(request): Json<TailorRequest>,
+) -> (StatusCode, Json<TailorResponse>) {
+    match tailor_and_render(request).await {
+        Ok(response) => {
+            if let Err(e) = state.app_handle.emit("resume-tailored", &response) {
+                eprintln!("[server] Failed to emit resume-tailored event: {e}");
+            }
+            (StatusCode::OK, Json(response))
+        }
+        Err(error) => {
+            let message = error.to_string();
+            eprintln!("[tailoring] {message}");
+            (StatusCode::BAD_REQUEST, Json(failed_response(message)))
+        }
+    }
 }
 
 async fn ollama_proxy_handler(
@@ -405,6 +499,7 @@ pub async fn start_server(app_handle: AppHandle) {
     let app = Router::new()
         .route("/health", get(health_handler))
         .route("/analyze", post(analyze_handler))
+        .route("/tailor", post(tailor_handler))
         .route("/api/ollama", post(ollama_proxy_handler))
         .layer(cors)
         .with_state(state.clone());

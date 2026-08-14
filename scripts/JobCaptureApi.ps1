@@ -7,7 +7,8 @@ $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName System.Net
 
 $Root = Split-Path -Parent (Split-Path -Parent $PSCommandPath)
-$Captures = Join-Path $Root 'captures'
+$Data = Join-Path $Root 'data'
+$Captures = Join-Path $Data 'job-captures'
 $LatestCapture = Join-Path $Captures 'latest.json'
 
 function Ensure-CaptureDir {
@@ -184,7 +185,7 @@ function Handle-Request($Request) {
     }
 
     $saved = Save-Capture $payload
-    $relativeLatest = 'captures/latest.json'
+    $relativeLatest = 'data/job-captures/latest.json'
     $relativeCapture = Resolve-Path -LiteralPath $saved.capturePath -Relative
 
     return New-JsonResponse 200 @{

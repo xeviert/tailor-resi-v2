@@ -21,7 +21,7 @@ impl AnalysisConfig {
             model: std::env::var("OPENAI_MODEL")
                 .ok()
                 .filter(|value| !value.trim().is_empty())
-                .unwrap_or_else(|| "gpt-5-mini".to_string()),
+                .unwrap_or_else(|| "gpt-5.6-luna".to_string()),
             base_url: std::env::var("OPENAI_BASE_URL")
                 .ok()
                 .filter(|value| !value.trim().is_empty())

@@ -1,1 +1,9 @@
 src-tauri/target/
+resume/generated/*
+!resume/generated/Xevier_T_CV_en.generated.docx
+!resume/generated/Xevier_T_CV_fr.generated.docx
+resume/variants/
+resume/qa/
+data/job-captures/*
+!data/job-captures/2026-08-14T1233442035470Z-job.json
+!data/job-captures/latest.json
