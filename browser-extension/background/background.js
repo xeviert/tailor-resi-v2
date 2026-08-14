@@ -2,19 +2,7 @@
 
 console.log('ResiTailor background service worker loaded');
 
-const BACKEND_URL = 'http://localhost:3000/captures';
-const HEALTH_URL = 'http://localhost:3000/health';
-
-async function checkBackendHealth() {
-  try {
-    const res = await fetch(HEALTH_URL);
-    if (!res.ok) return false;
-    const data = await res.json();
-    return data.app === 'resi-tailor';
-  } catch {
-    return false;
-  }
-}
+const BACKEND_URL = 'http://127.0.0.1:3000/captures';
 
 // Per-tab job buffer: tabId → [{ job, score, source, timestamp }]
 const tabJobs = new Map();
@@ -170,14 +158,6 @@ async function handleExtractJob() {
     json: bestJob,
     capturedCount: buffer.length,
   };
-
-  const healthy = await checkBackendHealth();
-  if (!healthy) {
-    return {
-      success: false,
-      error: 'Cannot reach Tauri app on port 3000. Make sure it is running and port 3000 is free.',
-    };
-  }
 
   console.log('Sending to backend, score:', bestScore);
 

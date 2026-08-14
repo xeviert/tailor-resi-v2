@@ -351,9 +351,36 @@ pub fn persist_capture(payload: &serde_json::Value) -> Result<CapturedJob, Strin
     let text = serde_json::to_string_pretty(&captured).map_err(|error| error.to_string())?;
     fs::write(directory.join(format!("{received_at_ms}-job.json")), &text)
         .map_err(|error| error.to_string())?;
-    fs::write(directory.join("latest.json"), format!("{text}\n"))
-        .map_err(|error| error.to_string())?;
+    write_latest_capture(&directory.join("latest.json"), &format!("{text}\n"))?;
     Ok(captured)
+}
+
+fn write_latest_capture(path: &std::path::Path, text: &str) -> Result<(), String> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| format!("Capture path has no parent: {}", path.display()))?;
+    let unique_suffix = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|error| error.to_string())?
+        .as_nanos();
+    let temporary_path = parent.join(format!(
+        ".latest-{}-{unique_suffix}.tmp",
+        std::process::id()
+    ));
+
+    fs::write(&temporary_path, text).map_err(|error| error.to_string())?;
+    if let Err(error) = fs::rename(&temporary_path, path) {
+        let _ = fs::remove_file(&temporary_path);
+        return Err(error.to_string());
+    }
+    Ok(())
+}
+
+fn parse_latest_capture(text: &str) -> Result<Option<CapturedJob>, serde_json::Error> {
+    if text.trim().is_empty() {
+        return Ok(None);
+    }
+    serde_json::from_str(text).map(Some)
 }
 
 pub fn load_latest_capture() -> Result<Option<CapturedJob>, String> {
@@ -361,22 +388,25 @@ pub fn load_latest_capture() -> Result<Option<CapturedJob>, String> {
     if !path.exists() {
         return Ok(None);
     }
-    let value: serde_json::Value =
-        serde_json::from_str(&fs::read_to_string(path).map_err(|error| error.to_string())?)
-            .map_err(|error| error.to_string())?;
-    if let Ok(capture) = serde_json::from_value::<CapturedJob>(value.clone()) {
-        return Ok(Some(capture));
+    let text = fs::read_to_string(&path).map_err(|error| error.to_string())?;
+    match parse_latest_capture(&text) {
+        Ok(capture) => Ok(capture),
+        Err(error) => {
+            eprintln!(
+                "[capture] Ignoring invalid latest capture at {}: {error}",
+                path.display()
+            );
+            Ok(None)
+        }
     }
-    // Accept captures created by the legacy PowerShell bridge.
-    Ok(Some(CapturedJob {
-        received_at_ms: 0,
-        parsed: parse_job_data(&value),
-        payload: value,
-    }))
 }
 
 async fn health_handler() -> Json<serde_json::Value> {
-    Json(serde_json::json!({ "status": "ok", "app": "resi-tailor" }))
+    Json(serde_json::json!({
+        "status": "ok",
+        "app": "resi-tailor",
+        "bridge": "tauri-rust"
+    }))
 }
 
 async fn capture_handler(
@@ -643,8 +673,12 @@ pub async fn start_server(app_handle: AppHandle) {
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_job_data, CapturedJob};
+    use super::{parse_job_data, parse_latest_capture, write_latest_capture, CapturedJob};
     use serde_json::json;
+    use std::{
+        fs,
+        time::{SystemTime, UNIX_EPOCH},
+    };
 
     #[test]
     fn parses_indeed_payload() {
@@ -760,5 +794,30 @@ mod tests {
         let restored: CapturedJob = serde_json::from_str(&serialized).unwrap();
         assert_eq!(restored.received_at_ms, 42);
         assert_eq!(restored.parsed["title"], "Engineer");
+    }
+
+    #[test]
+    fn blank_or_invalid_latest_capture_is_treated_as_missing() {
+        assert!(parse_latest_capture(" \n\t ").unwrap().is_none());
+        assert!(parse_latest_capture("not json").is_err());
+        assert!(parse_latest_capture(r#"{"receivedAt":"2026-08-14T12:33:44Z","json":{}}"#).is_err());
+    }
+
+    #[test]
+    fn latest_capture_write_replaces_complete_file_without_temp_artifacts() {
+        let suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let directory = std::env::temp_dir().join(format!("resi-tailor-capture-{suffix}"));
+        fs::create_dir_all(&directory).unwrap();
+        let latest = directory.join("latest.json");
+
+        write_latest_capture(&latest, "{\"version\":1}\n").unwrap();
+        write_latest_capture(&latest, "{\"version\":2}\n").unwrap();
+
+        assert_eq!(fs::read_to_string(&latest).unwrap(), "{\"version\":2}\n");
+        assert_eq!(fs::read_dir(&directory).unwrap().count(), 1);
+        fs::remove_dir_all(directory).unwrap();
     }
 }

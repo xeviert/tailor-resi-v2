@@ -1,1 +1,1 @@
-{}
+{"default":{"identifier":"default","description":"Allows the main desktop window to receive captured-job events.","local":true,"windows":["main"],"permissions":["core:event:allow-listen","core:event:allow-unlisten","shell:allow-open"]}}
