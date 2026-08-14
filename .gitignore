@@ -1,4 +1,10 @@
 src-tauri/target/
+.env
+
+# JavaScript dependencies and Vite build output
+node_modules/
+dist/
+
 resume/generated/*
 !resume/generated/Xevier_T_CV_en.generated.docx
 !resume/generated/Xevier_T_CV_fr.generated.docx

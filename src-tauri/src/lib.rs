@@ -1,11 +1,14 @@
 mod analysis;
 mod commands;
+mod config;
 mod error;
 mod server;
 mod tailoring;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    config::load_development_env();
+
     tauri::Builder::default()
         .plugin(tauri_plugin_sql::Builder::default().build())
         .plugin(tauri_plugin_shell::init())

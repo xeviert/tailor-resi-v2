@@ -3273,6 +3273,7 @@ name = "resi-tailor"
 version = "0.1.0"
 dependencies = [
  "axum",
+ "dotenvy",
  "reqwest 0.12.28",
  "serde",
  "serde_json",

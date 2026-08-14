@@ -62,6 +62,10 @@ pub enum AnalysisError {
     Http { status: StatusCode, body: String },
     #[error("OpenAI response did not contain structured output text")]
     MissingOutputText,
+    #[error("OpenAI returned an empty response body")]
+    EmptyResponseBody,
+    #[error("OpenAI returned empty structured output text")]
+    EmptyOutputText,
     #[error("OpenAI analysis JSON was invalid: {0}")]
     InvalidJson(String),
 }
@@ -180,10 +184,16 @@ pub async fn analyze_job(
 }
 
 pub fn parse_job_analysis_from_response(body: &str) -> Result<JobAnalysis, AnalysisError> {
+    if body.trim().is_empty() {
+        return Err(AnalysisError::EmptyResponseBody);
+    }
     let response: serde_json::Value = serde_json::from_str(body)
         .map_err(|error| AnalysisError::InvalidJson(error.to_string()))?;
 
     let text = find_output_text(&response).ok_or(AnalysisError::MissingOutputText)?;
+    if text.trim().is_empty() {
+        return Err(AnalysisError::EmptyOutputText);
+    }
     serde_json::from_str(text).map_err(|error| AnalysisError::InvalidJson(error.to_string()))
 }
 
@@ -258,5 +268,11 @@ mod tests {
     fn rejects_missing_output_text() {
         let err = parse_job_analysis_from_response(r#"{"output":[]}"#).unwrap_err();
         assert!(err.to_string().contains("structured output text"));
+    }
+
+    #[test]
+    fn rejects_an_empty_responses_api_body() {
+        let err = parse_job_analysis_from_response("  \n").unwrap_err();
+        assert!(err.to_string().contains("empty response body"));
     }
 }

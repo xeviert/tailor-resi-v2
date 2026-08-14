@@ -85,6 +85,10 @@ pub enum TailoringError {
     Http { status: StatusCode, body: String },
     #[error("OpenAI response did not contain structured output text")]
     MissingOutputText,
+    #[error("OpenAI returned an empty response body")]
+    EmptyResponseBody,
+    #[error("OpenAI returned empty structured output text")]
+    EmptyOutputText,
     #[error("OpenAI tailoring JSON was invalid: {0}")]
     InvalidJson(String),
     #[error("Tailored resume failed safety validation: {0}")]
@@ -289,9 +293,15 @@ pub async fn tailor_resume(
 }
 
 pub fn parse_tailored_resume_from_response(body: &str) -> Result<TailoredResume, TailoringError> {
+    if body.trim().is_empty() {
+        return Err(TailoringError::EmptyResponseBody);
+    }
     let response: serde_json::Value = serde_json::from_str(body)
         .map_err(|error| TailoringError::InvalidJson(error.to_string()))?;
     let text = find_output_text(&response).ok_or(TailoringError::MissingOutputText)?;
+    if text.trim().is_empty() {
+        return Err(TailoringError::EmptyOutputText);
+    }
     serde_json::from_str(text).map_err(|error| TailoringError::InvalidJson(error.to_string()))
 }
 

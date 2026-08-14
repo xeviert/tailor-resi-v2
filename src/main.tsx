@@ -11,6 +11,19 @@ type PipelineResult = { analysis: { summary: string }; resume: { page_count: num
 
 function text(value: unknown) { return typeof value === 'string' && value.trim() ? value : 'Not provided'; }
 function description(job: Record<string, unknown>) { return text(job.description ?? job.description_html ?? job.qualifications); }
+function errorText(reason: unknown) {
+  if (typeof reason === 'string') return reason;
+  if (reason instanceof Error) return reason.message;
+  if (reason && typeof reason === 'object') {
+    const details = reason as Record<string, unknown>;
+    for (const key of ['message', 'error', 'detail']) {
+      const value = details[key];
+      if (typeof value === 'string' && value.trim()) return value;
+    }
+    try { return JSON.stringify(reason); } catch { return 'An unexpected error occurred.'; }
+  }
+  return String(reason || 'An unexpected error occurred.');
+}
 
 function App() {
   const [capture, setCapture] = useState<CapturedJob | null>(null);
@@ -20,7 +33,7 @@ function App() {
   const [result, setResult] = useState<PipelineResult | null>(null);
 
   useEffect(() => {
-    invoke<CapturedJob | null>('get_latest_job').then(setCapture).catch((reason) => setError(String(reason)));
+    invoke<CapturedJob | null>('get_latest_job').then(setCapture).catch((reason) => setError(errorText(reason)));
     let unlisten: (() => void) | undefined;
     void listen<CapturedJob>('job-data-received', (event) => {
       setCapture(event.payload); setResult(null); setError('');
@@ -31,11 +44,11 @@ function App() {
   async function generate() {
     setRunning(true); setError(''); setResult(null);
     try { setResult(await invoke<PipelineResult>('run_resume_pipeline', { language })); }
-    catch (reason) { setError(String(reason)); }
+    catch (reason) { setError(errorText(reason)); }
     finally { setRunning(false); }
   }
   async function action(command: string) {
-    try { await invoke(command, { language }); } catch (reason) { setError(String(reason)); }
+    try { await invoke(command, { language }); } catch (reason) { setError(errorText(reason)); }
   }
 
   const job = capture?.parsed;
