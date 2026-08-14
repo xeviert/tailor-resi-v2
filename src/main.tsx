@@ -8,141 +8,52 @@ import './styles.css';
 type Language = 'en' | 'fr';
 type CapturedJob = { received_at_ms: number; payload: unknown; parsed: Record<string, unknown> };
 type Report = { estimated_ats_coverage_score: number; omitted_unsupported_keywords: string[] };
-type ResumeResult = {
-  success: boolean;
-  tailoring_status: 'completed' | 'partial' | 'failed';
-  validation_status: string;
-  fit_status: string;
-  page_count: number | null;
-  report: Report | null;
-  docx_path: string | null;
-  latest_docx_path: string | null;
-  pdf_path: string | null;
-  latest_pdf_path: string | null;
-  error: string | null;
-};
-type PipelineResult = { analysis: { summary: string }; resume: ResumeResult };
-type ProgressStatus = 'started' | 'completed' | 'retrying' | 'failed';
-type PipelineProgress = {
-  stage: string;
-  status: ProgressStatus;
-  message: string;
-  attempt: number | null;
-  total_attempts: number | null;
-};
+type ResumeResult = { success: boolean; tailoring_status: 'completed' | 'partial' | 'failed'; validation_status: string; fit_status: string; page_count: number | null; report: Report | null; docx_path: string | null; latest_docx_path: string | null; pdf_path: string | null; latest_pdf_path: string | null; downloads_pdf_path: string | null; downloads_error: string | null; error: string | null };
+type Analysis = { summary: string };
+type PipelineResult = { analysis: Analysis; resume: ResumeResult };
+type EvidenceKind = 'technology' | 'method_domain' | 'responsibility';
+type PreflightItem = { term: string; kind: EvidenceKind; importance: number; source: 'base_resume' | 'evidence_bank' | 'needs_approval'; proof_note: string | null };
+type PreflightResult = { analysis: Analysis; items: PreflightItem[] };
+type EvidenceEntry = { term: string; kind: EvidenceKind; proof_note: string | null; user_attested: boolean };
+type EvidenceBank = { version: number; entries: EvidenceEntry[] };
+type PipelineProgress = { stage: string; status: 'started' | 'completed' | 'retrying' | 'failed'; message: string; attempt: number | null; total_attempts: number | null };
 const BRIDGE_HEALTH_URL = 'http://127.0.0.1:3000/health';
-const PIPELINE_STAGES = [
-  ['ats_analysis', 'ATS analysis'],
-  ['resume_tailoring', 'Resume tailoring'],
-  ['safety_validation', 'Safety validation'],
-  ['variant_write', 'Save variant'],
-  ['docx_render', 'DOCX render'],
-  ['locked_validation', 'Layout validation'],
-  ['pdf_fit', 'PDF one-page fit'],
-] as const;
+const PIPELINE_STAGES = [['ats_analysis', 'ATS analysis'], ['resume_tailoring', 'Resume tailoring'], ['safety_validation', 'Safety validation'], ['variant_write', 'Save variant'], ['docx_render', 'DOCX render'], ['locked_validation', 'Layout validation'], ['pdf_fit', 'PDF one-page fit']] as const;
 
-function errorText(reason: unknown) {
-  if (typeof reason === 'string') return reason;
-  if (reason instanceof Error) return reason.message;
-  if (reason && typeof reason === 'object') {
-    const details = reason as Record<string, unknown>;
-    for (const key of ['message', 'error', 'detail']) {
-      const value = details[key];
-      if (typeof value === 'string' && value.trim()) return value;
-    }
-    try { return JSON.stringify(reason); } catch { return 'An unexpected error occurred.'; }
-  }
-  return String(reason || 'An unexpected error occurred.');
-}
+function errorText(reason: unknown) { if (typeof reason === 'string') return reason; if (reason instanceof Error) return reason.message; try { return JSON.stringify(reason); } catch { return 'An unexpected error occurred.'; } }
 
 function ProgressPanel({ events, running }: { events: PipelineProgress[]; running: boolean }) {
   const latest = events[events.length - 1];
-  return <section className="pipeline-progress" aria-live="polite">
-    <div className="progress-heading"><div><p className="eyebrow">PIPELINE ACTIVITY</p><h2>{running ? 'Building your tailored resume' : latest?.status === 'failed' ? 'Pipeline stopped' : latest?.stage === 'complete' ? 'Pipeline complete' : 'Pipeline activity'}</h2></div>{running && <span className="progress-spinner" aria-label="Pipeline running" />}</div>
-    <ol className="progress-steps">
-      {PIPELINE_STAGES.map(([stage, label]) => {
-        const event = [...events].reverse().find((candidate) => candidate.stage === stage);
-        const status = event?.status ?? 'pending';
-        const attempt = event?.attempt && event.total_attempts ? ` (${event.attempt}/${event.total_attempts})` : '';
-        return <li className={`progress-step ${status}`} key={stage}><span className="step-marker">{status === 'completed' ? '✓' : status === 'failed' ? '!' : ''}</span><span><strong>{label}</strong>{attempt}</span></li>;
-      })}
-    </ol>
-    {latest && <p className={`progress-detail ${latest.status}`}>{latest.message}</p>}
-  </section>;
+  return <section className="pipeline-progress" aria-live="polite"><div className="progress-heading"><div><p className="eyebrow">PIPELINE ACTIVITY</p><h2>{running ? 'Building your tailored resume' : latest?.status === 'failed' ? 'Pipeline stopped' : 'Pipeline activity'}</h2></div>{running && <span className="progress-spinner" aria-label="Pipeline running" />}</div><ol className="progress-steps">{PIPELINE_STAGES.map(([stage, label]) => { const event = [...events].reverse().find((candidate) => candidate.stage === stage); const status = event?.status ?? 'pending'; return <li className={`progress-step ${status}`} key={stage}><span className="step-marker">{status === 'completed' ? 'OK' : status === 'failed' ? '!' : ''}</span><span><strong>{label}</strong></span></li>; })}</ol>{latest && <p className={`progress-detail ${latest.status}`}>{latest.message}</p>}</section>;
 }
 
 function ResultPanel({ result, action }: { result: PipelineResult; action: (command: string) => void }) {
-  const { resume } = result;
-  const partial = resume.tailoring_status === 'partial';
-  const report = resume.report;
-  return <section className={`result ${partial ? 'partial-result' : ''}`}>
-    <div>
-      <p className="eyebrow">{partial ? 'DOCX READY' : 'COMPLETE'}</p>
-      <h2>{partial ? 'Validated DOCX saved; PDF not ready' : 'One-page PDF is ready'}</h2>
-      <p>{result.analysis.summary}</p>
-      <p className="muted">{partial
-        ? 'The validated DOCX opened automatically. You can reopen it or show it in its folder below.'
-        : `Locked sections validated - ${resume.page_count} page - saved as ${resume.latest_pdf_path}`}</p>
-      {partial && resume.error && <p className="partial-error">PDF step: {resume.error}</p>}
-    </div>
-    {report && <div className="score"><strong>{report.estimated_ats_coverage_score}</strong><span>ATS coverage</span></div>}
-    <div className="result-actions">
-      <button className="primary" onClick={() => action(partial ? 'open_latest_docx' : 'open_latest_pdf')}>{partial ? 'Open DOCX' : 'Open PDF'}</button>
-      <button onClick={() => action(partial ? 'reveal_latest_docx' : 'reveal_latest_pdf')}>Open folder</button>
-    </div>
-    {report && report.omitted_unsupported_keywords.length > 0 && <p className="unsupported"><b>Not added without evidence:</b> {report.omitted_unsupported_keywords.join(', ')}</p>}
-  </section>;
+  const { resume } = result; const partial = resume.tailoring_status === 'partial'; const report = resume.report;
+  const saveMessage = partial ? 'The validated DOCX opened automatically. You can reopen it or show it in its folder below.' : resume.downloads_pdf_path ? `Locked sections validated - ${resume.page_count} page - copied to Downloads.` : `Locked sections validated - ${resume.page_count} page - saved as ${resume.latest_pdf_path}`;
+  return <section className={`result ${partial ? 'partial-result' : ''}`}><div><p className="eyebrow">{partial ? 'DOCX READY' : 'COMPLETE'}</p><h2>{partial ? 'Validated DOCX saved; PDF not ready' : 'One-page PDF is ready'}</h2><p>{result.analysis.summary}</p><p className="muted">{saveMessage}</p>{partial && resume.error && <p className="partial-error">PDF step: {resume.error}</p>}{resume.downloads_error && <p className="download-warning">Your PDF is ready, but it could not be copied to Downloads: {resume.downloads_error}</p>}</div>{report && <div className="score"><strong>{report.estimated_ats_coverage_score}</strong><span>estimated ATS coverage</span></div>}<div className="result-actions"><button className="primary" onClick={() => action(partial ? 'open_latest_docx' : 'open_latest_pdf')}>{partial ? 'Open DOCX' : 'Open PDF'}</button><button onClick={() => action(partial ? 'reveal_latest_docx' : 'reveal_latest_pdf')}>Open folder</button></div>{report && report.omitted_unsupported_keywords.length > 0 && <p className="unsupported"><b>Still not added:</b> {report.omitted_unsupported_keywords.join(', ')}</p>}</section>;
+}
+
+function PreflightPanel({ preflight, selected, proofs, onToggle, onProof }: { preflight: PreflightResult; selected: Set<string>; proofs: Record<string, string>; onToggle: (term: string) => void; onProof: (term: string, proof: string) => void }) {
+  const groups: [EvidenceKind, string, string][] = [['technology', 'Technologies & tools', 'Exact tools, platforms, and frameworks.'], ['method_domain', 'Methods & domains', 'Working approaches and domain vocabulary.'], ['responsibility', 'Responsibilities', 'Claims about what you have done; a role/project proof note is required for bullet use.']];
+  return <section className="preflight"><p className="eyebrow">EVIDENCE PREFLIGHT</p><h2>Confirm what you can truthfully claim</h2><p className="muted">Base-resume matches are already available. Selected evidence is saved to your local bank and can be reused on future jobs.</p>{groups.map(([kind, title, hint]) => { const items = preflight.items.filter((item) => item.kind === kind); return items.length ? <div className="evidence-group" key={kind}><h3>{title}</h3><p>{hint}</p>{items.map((item) => { const isBase = item.source === 'base_resume'; const checked = isBase || selected.has(item.term); const proof = proofs[item.term] ?? item.proof_note ?? ''; return <article className={`evidence-item ${item.source}`} key={item.term}><label><input type="checkbox" checked={checked} disabled={isBase} onChange={() => onToggle(item.term)} /><span><strong>{item.term}</strong><small>{isBase ? 'Already supported by your base resume' : item.source === 'evidence_bank' ? 'Saved in your evidence bank' : 'Needs your approval'} - priority {item.importance}/5</small></span></label>{!isBase && checked && <label className="proof-note"><span>Proof note (optional; required for experience bullets)</span><input value={proof} placeholder="e.g. Used on StealthX RAG platform" onChange={(event) => onProof(item.term, event.target.value)} /></label>}</article>; })}</div> : null; })}</section>;
+}
+
+function PreflightSummary({ preflight, selected, onReopen }: { preflight: PreflightResult; selected: Set<string>; onReopen: () => void }) {
+  const approved = preflight.items.filter((item) => item.source === 'base_resume' || selected.has(item.term)).length;
+  return <section className="preflight-summary"><div><p className="eyebrow">EVIDENCE CONFIRMED</p><strong>{approved} job signals are available for tailoring</strong></div><button onClick={onReopen}>Review evidence</button></section>;
 }
 
 function App() {
-  const [capture, setCapture] = useState<CapturedJob | null>(null);
-  const [language, setLanguage] = useState<Language>('en');
-  const [running, setRunning] = useState(false);
-  const [error, setError] = useState('');
-  const [result, setResult] = useState<PipelineResult | null>(null);
-  const [progressEvents, setProgressEvents] = useState<PipelineProgress[]>([]);
-
-  useEffect(() => {
-    void fetch(BRIDGE_HEALTH_URL).then(async (response) => {
-      const health = await response.json() as { bridge?: string };
-      if (!response.ok || health.bridge !== 'tauri-rust') {
-        throw new Error('The Rust capture bridge is unavailable. Stop any legacy capture server on port 3000, then restart the desktop app.');
-      }
-    }).catch((reason) => setError(errorText(reason)));
-    invoke<CapturedJob | null>('get_latest_job').then(setCapture).catch((reason) => setError(errorText(reason)));
-    let unlisten: (() => void) | undefined;
-    let unlistenProgress: (() => void) | undefined;
-    void listen<CapturedJob>('job-data-received', (event) => {
-      setCapture(event.payload); setResult(null); setProgressEvents([]); setError('');
-    }).then((cleanup) => { unlisten = cleanup; }).catch((reason) => setError(errorText(reason)));
-    void listen<PipelineProgress>('resume-pipeline-progress', (event) => {
-      setProgressEvents((current) => [...current, event.payload]);
-    }).then((cleanup) => { unlistenProgress = cleanup; }).catch((reason) => setError(errorText(reason)));
-    return () => { unlisten?.(); unlistenProgress?.(); };
-  }, []);
-
-  async function generate() {
-    setRunning(true); setError(''); setResult(null); setProgressEvents([]);
-    try { setResult(await invoke<PipelineResult>('run_resume_pipeline', { language })); }
-    catch (reason) { setError(errorText(reason)); }
-    finally { setRunning(false); }
-  }
-
-  async function action(command: string) {
-    try { await invoke(command, { language }); } catch (reason) { setError(errorText(reason)); }
-  }
-
+  const [capture, setCapture] = useState<CapturedJob | null>(null); const [language, setLanguage] = useState<Language>('en'); const [running, setRunning] = useState(false); const [error, setError] = useState(''); const [result, setResult] = useState<PipelineResult | null>(null); const [progressEvents, setProgressEvents] = useState<PipelineProgress[]>([]); const [preflight, setPreflight] = useState<PreflightResult | null>(null); const [preflightCollapsed, setPreflightCollapsed] = useState(false); const [selected, setSelected] = useState<Set<string>>(new Set()); const [proofs, setProofs] = useState<Record<string, string>>({}); const [bank, setBank] = useState<EvidenceBank | null>(null);
+  const loadBank = () => invoke<EvidenceBank>('get_evidence_bank').then(setBank).catch((reason) => setError(errorText(reason)));
+  useEffect(() => { void fetch(BRIDGE_HEALTH_URL).then(async (response) => { const health = await response.json() as { bridge?: string }; if (!response.ok || health.bridge !== 'tauri-rust') throw new Error('The Rust capture bridge is unavailable. Stop any legacy capture server on port 3000, then restart the desktop app.'); }).catch((reason) => setError(errorText(reason))); void invoke<CapturedJob | null>('get_latest_job').then(setCapture).catch((reason) => setError(errorText(reason))); void loadBank(); let unlisten: (() => void) | undefined; let unlistenProgress: (() => void) | undefined; void listen<CapturedJob>('job-data-received', (event) => { setCapture(event.payload); setResult(null); setPreflight(null); setPreflightCollapsed(false); setProgressEvents([]); setError(''); }).then((cleanup) => { unlisten = cleanup; }).catch((reason) => setError(errorText(reason))); void listen<PipelineProgress>('resume-pipeline-progress', (event) => setProgressEvents((current) => [...current, event.payload])).then((cleanup) => { unlistenProgress = cleanup; }).catch((reason) => setError(errorText(reason))); return () => { unlisten?.(); unlistenProgress?.(); }; }, []);
+  async function analyze() { setRunning(true); setError(''); setResult(null); setProgressEvents([]); try { const next = await invoke<PreflightResult>('analyze_latest_job', { language }); setPreflight(next); setPreflightCollapsed(false); setSelected(new Set(next.items.filter((item) => item.source === 'evidence_bank').map((item) => item.term))); setProofs(Object.fromEntries(next.items.filter((item) => item.proof_note).map((item) => [item.term, item.proof_note ?? '']))); } catch (reason) { setError(errorText(reason)); } finally { setRunning(false); } }
+  async function generate() { if (!preflight) return analyze(); setPreflightCollapsed(true); setRunning(true); setError(''); setResult(null); setProgressEvents([]); const selectedEvidence = preflight.items.filter((item) => item.source !== 'base_resume' && selected.has(item.term)).map((item) => ({ term: item.term, kind: item.kind, proof_note: proofs[item.term]?.trim() || null })); try { const resume = await invoke<ResumeResult>('generate_tailored_resume', { request: { language, analysis: preflight.analysis, selected_evidence: selectedEvidence } }); setResult({ analysis: preflight.analysis, resume }); void loadBank(); } catch (reason) { setError(errorText(reason)); } finally { setRunning(false); } }
+  async function action(command: string) { try { await invoke(command, { language }); } catch (reason) { setError(errorText(reason)); } }
+  async function remove(term: string) { try { setBank(await invoke<EvidenceBank>('remove_evidence_bank_entry', { term })); } catch (reason) { setError(errorText(reason)); } }
+  function changeLanguage(next: Language) { setLanguage(next); setPreflight(null); setPreflightCollapsed(false); setSelected(new Set()); setProofs({}); setResult(null); }
   const job = capture?.parsed;
-  return <main>
-    <header><div><p className="eyebrow">LOCAL RESUME TAILORING</p><h1>Resume Workbench</h1></div><span className={capture ? 'badge ready' : 'badge'}>{capture ? 'Job captured' : 'Waiting for capture'}</span></header>
-    {!job ? <section className="empty"><h2>Capture a job post to begin</h2><p>Open a job post in your browser, then choose <b>Extract Job</b> from the ResiTailor extension. Its details will appear here without running AI or creating files.</p></section> : <>
-      <JobPanel job={job} />
-      <section className="run-panel"><div><h2>Tailor your resume</h2><p>Analysis, truthful tailoring, layout validation, and one-page PDF export run locally from this action.</p></div><div className="controls"><div className="language" role="group" aria-label="Resume language"><button className={language === 'en' ? 'selected' : ''} onClick={() => setLanguage('en')}>EN</button><button className={language === 'fr' ? 'selected' : ''} onClick={() => setLanguage('fr')}>FR</button></div><button className="primary" disabled={running} onClick={generate}>{running ? 'Generating...' : 'Analyze & Generate PDF'}</button></div></section>
-      {(running || progressEvents.length > 0) && <ProgressPanel events={progressEvents} running={running} />}
-    </>}
-    {error && <p className="error">{error}</p>}
-    {result && <ResultPanel result={result} action={action} />}
-  </main>;
+  return <main><header><div><p className="eyebrow">LOCAL RESUME TAILORING</p><h1>Resume Workbench</h1></div><span className={capture ? 'badge ready' : 'badge'}>{capture ? 'Job captured' : 'Waiting for capture'}</span></header>{!job ? <section className="empty"><h2>Capture a job post to begin</h2><p>Open a job post in your browser, then choose <b>Extract Job</b> from the ResiTailor extension.</p></section> : <><JobPanel job={job} /><section className="run-panel"><div><h2>{preflight ? 'Review evidence, then tailor' : 'Analyze job requirements'}</h2><p>{preflight ? 'Choose the relevant terms you can support before generating.' : 'Analyze ATS signals before deciding what belongs in this application.'}</p></div><div className="controls"><div className="language" role="group" aria-label="Resume language"><button className={language === 'en' ? 'selected' : ''} disabled={running} onClick={() => changeLanguage('en')}>EN</button><button className={language === 'fr' ? 'selected' : ''} disabled={running} onClick={() => changeLanguage('fr')}>FR</button></div><button className="primary" disabled={running} onClick={preflight ? generate : analyze}>{running ? 'Working...' : preflight ? 'Generate tailored PDF' : 'Analyze job'}</button></div></section>{preflight && (preflightCollapsed ? <PreflightSummary preflight={preflight} selected={selected} onReopen={() => setPreflightCollapsed(false)} /> : <PreflightPanel preflight={preflight} selected={selected} proofs={proofs} onToggle={(term) => setSelected((current) => { const next = new Set(current); next.has(term) ? next.delete(term) : next.add(term); return next; })} onProof={(term, proof) => setProofs((current) => ({ ...current, [term]: proof }))} />)}{(running || progressEvents.length > 0) && <ProgressPanel events={progressEvents} running={running} />}</>}{bank && bank.entries.length > 0 && <section className="evidence-bank"><p className="eyebrow">SAVED EVIDENCE</p><h2>Your local capability bank</h2><div>{bank.entries.map((entry) => <span className="bank-entry" key={entry.term}>{entry.term}<button aria-label={`Remove ${entry.term}`} onClick={() => remove(entry.term)}>x</button></span>)}</div></section>}{error && <p className="error">{error}</p>}{result && <ResultPanel result={result} action={action} />}</main>;
 }
 
 createRoot(document.getElementById('root')!).render(<App />);

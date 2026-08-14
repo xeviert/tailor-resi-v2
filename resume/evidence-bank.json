@@ -1,0 +1,260 @@
+{
+  "version": 1,
+  "entries": [
+    {
+      "term": "AI-native experiences",
+      "kind": "method_domain",
+      "user_attested": true
+    },
+    {
+      "term": "AWS Bedrock",
+      "kind": "technology",
+      "user_attested": true
+    },
+    {
+      "term": "Asynchronous architectures",
+      "kind": "technology",
+      "user_attested": true
+    },
+    {
+      "term": "Autonomous ownership of ambiguous technical problems from framing to delivery",
+      "kind": "technology",
+      "user_attested": true
+    },
+    {
+      "term": "Backend Software Engineer (IC3)",
+      "kind": "technology",
+      "user_attested": true
+    },
+    {
+      "term": "Clear ownership of reliability and maintainability",
+      "kind": "technology",
+      "user_attested": true
+    },
+    {
+      "term": "Designing and shipping scalable backend services",
+      "kind": "technology",
+      "user_attested": true
+    },
+    {
+      "term": "Experience contributing to complex technical projects in fast-paced product organizations",
+      "kind": "technology",
+      "user_attested": true
+    },
+    {
+      "term": "Fluent written and spoken English",
+      "kind": "technology",
+      "user_attested": true
+    },
+    {
+      "term": "Independent delivery of complex components in partnership with a Staff Engineer",
+      "kind": "technology",
+      "user_attested": true
+    },
+    {
+      "term": "Integrating APIs and external services into robust product backends",
+      "kind": "technology",
+      "user_attested": true
+    },
+    {
+      "term": "LLM integration",
+      "kind": "technology",
+      "user_attested": true
+    },
+    {
+      "term": "Significant backend software engineering experience in production environments",
+      "kind": "technology",
+      "user_attested": true
+    },
+    {
+      "term": "Strong backend engineering skills with TypeScript / Node.js or adjacent technologies",
+      "kind": "technology",
+      "user_attested": true
+    },
+    {
+      "term": "backend software engineering",
+      "kind": "technology",
+      "user_attested": true
+    },
+    {
+      "term": "end-to-end ownership",
+      "kind": "technology",
+      "user_attested": true
+    },
+    {
+      "term": "multi-step orchestration",
+      "kind": "technology",
+      "user_attested": true
+    },
+    {
+      "term": "reliability",
+      "kind": "technology",
+      "user_attested": true
+    },
+    {
+      "term": "Anthropic",
+      "kind": "technology",
+      "user_attested": true
+    },
+    {
+      "term": "Build secure coding and responsible data handling practices",
+      "kind": "responsibility",
+      "user_attested": true
+    },
+    {
+      "term": "Collaborate with Product Managers and Designers",
+      "kind": "responsibility",
+      "user_attested": true
+    },
+    {
+      "term": "Contribute to proof-of-concepts and experiments",
+      "kind": "responsibility",
+      "user_attested": true
+    },
+    {
+      "term": "Contribute to reusable service boundaries, contracts, and interfaces",
+      "kind": "responsibility",
+      "user_attested": true
+    },
+    {
+      "term": "Create shared engineering knowledge around LLM integration and async workflows",
+      "kind": "responsibility",
+      "user_attested": true
+    },
+    {
+      "term": "Define and uphold standards for latency, failure handling, cost efficiency, and resilience",
+      "kind": "responsibility",
+      "user_attested": true
+    },
+    {
+      "term": "Design, build, and operate backend services and APIs",
+      "kind": "responsibility",
+      "user_attested": true
+    },
+    {
+      "term": "English",
+      "kind": "technology",
+      "user_attested": true
+    },
+    {
+      "term": "Ensure production reliability, maintainability, and security",
+      "kind": "responsibility",
+      "user_attested": true
+    },
+    {
+      "term": "Harden successful experiments into reliable production services",
+      "kind": "responsibility",
+      "user_attested": true
+    },
+    {
+      "term": "Help define MCP-compatible tools and capabilities",
+      "kind": "responsibility",
+      "user_attested": true
+    },
+    {
+      "term": "Implement architecture supporting AI-native product experiences",
+      "kind": "responsibility",
+      "user_attested": true
+    },
+    {
+      "term": "Implement context management, tool invocation, rich content access, and multi-step orchestration",
+      "kind": "responsibility",
+      "user_attested": true
+    },
+    {
+      "term": "Instrument services with logs, tracing, and metrics",
+      "kind": "responsibility",
+      "user_attested": true
+    },
+    {
+      "term": "Integrate LLMs through AWS Bedrock",
+      "kind": "responsibility",
+      "user_attested": true
+    },
+    {
+      "term": "MCP-compatible services",
+      "kind": "technology",
+      "user_attested": true
+    },
+    {
+      "term": "Manage conversations and contextual state",
+      "kind": "responsibility",
+      "user_attested": true
+    },
+    {
+      "term": "Own complex backend components end-to-end",
+      "kind": "responsibility",
+      "user_attested": true
+    },
+    {
+      "term": "Own deployment, monitoring, and continuous improvements",
+      "kind": "responsibility",
+      "user_attested": true
+    },
+    {
+      "term": "Power conversational and agentic AI features",
+      "kind": "responsibility",
+      "user_attested": true
+    },
+    {
+      "term": "Redis",
+      "kind": "technology",
+      "user_attested": true
+    },
+    {
+      "term": "Review code and challenge design decisions",
+      "kind": "responsibility",
+      "user_attested": true
+    },
+    {
+      "term": "Support ingestion and retrieval of rich content such as PDFs and images",
+      "kind": "responsibility",
+      "user_attested": true
+    },
+    {
+      "term": "Translate architectural direction into concrete technical implementations",
+      "kind": "responsibility",
+      "user_attested": true
+    },
+    {
+      "term": "cross-functional collaboration",
+      "kind": "technology",
+      "user_attested": true
+    },
+    {
+      "term": "secure coding",
+      "kind": "technology",
+      "user_attested": true
+    },
+    {
+      "term": "AI product delivery",
+      "kind": "method_domain",
+      "user_attested": true
+    },
+    {
+      "term": "AI-native product experiences",
+      "kind": "method_domain",
+      "user_attested": true
+    },
+    {
+      "term": "Curiosity about AI-native product design",
+      "kind": "technology",
+      "user_attested": true
+    },
+    {
+      "term": "Experience integrating LLMs with tool-calling, guardrails, and evaluation loops",
+      "kind": "technology",
+      "user_attested": true
+    },
+    {
+      "term": "LLM-enabled systems",
+      "kind": "method_domain",
+      "user_attested": true
+    },
+    {
+      "term": "MCP-compatible tools",
+      "kind": "method_domain",
+      "user_attested": true
+    }
+  ]
+}

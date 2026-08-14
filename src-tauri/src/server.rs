@@ -484,6 +484,7 @@ async fn analyze_handler(
                 language: "en".to_string(),
                 parsed: parsed.clone(),
                 analysis,
+                approved_evidence: vec![],
             };
             match tailor_and_render(request).await {
                 Ok(response) => {

@@ -2,6 +2,7 @@ mod analysis;
 mod commands;
 mod config;
 mod error;
+mod evidence;
 mod server;
 mod tailoring;
 
@@ -17,6 +18,10 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             commands::ping,
             commands::get_latest_job,
+            commands::analyze_latest_job,
+            commands::generate_tailored_resume,
+            commands::get_evidence_bank,
+            commands::remove_evidence_bank_entry,
             commands::run_resume_pipeline,
             commands::open_latest_pdf,
             commands::reveal_latest_pdf,

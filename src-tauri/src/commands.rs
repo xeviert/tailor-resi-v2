@@ -1,10 +1,11 @@
 use crate::{
     analysis::{analyze_job, AnalysisConfig, JobAnalysis},
+    evidence::{load_evidence_bank, preflight_items, remove_evidence, save_selected_evidence, selected_for_prompt, EvidenceBank, PreflightItem, SelectedEvidence},
     error::AppError,
     server::{load_latest_capture, CapturedJob},
-    tailoring::{tailor_and_render_with_progress, PipelineProgress, TailorRequest, TailorResponse},
+    tailoring::{load_base_resume, tailor_and_render_with_progress, workspace_root, PipelineProgress, TailorRequest, TailorResponse},
 };
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::{path::Path, process::Command};
 use tauri::{AppHandle, Emitter};
 
@@ -22,6 +23,20 @@ pub fn get_latest_job() -> Result<Option<CapturedJob>, AppError> {
 pub struct PipelineResult {
     pub analysis: JobAnalysis,
     pub resume: TailorResponse,
+}
+
+#[derive(Serialize)]
+pub struct PreflightResult {
+    pub analysis: JobAnalysis,
+    pub items: Vec<PreflightItem>,
+}
+
+#[derive(Deserialize)]
+pub struct GenerateTailoredResumeRequest {
+    pub language: String,
+    pub analysis: JobAnalysis,
+    #[serde(default)]
+    pub selected_evidence: Vec<SelectedEvidence>,
 }
 
 #[tauri::command]
@@ -86,6 +101,7 @@ pub async fn run_resume_pipeline(
             language: language.clone(),
             parsed: captured.parsed,
             analysis: analysis.clone(),
+            approved_evidence: vec![],
         },
         Some(&reporter),
     )
@@ -97,6 +113,59 @@ pub async fn run_resume_pipeline(
         }
     }
     Ok(PipelineResult { analysis, resume })
+}
+
+#[tauri::command]
+pub async fn analyze_latest_job(language: String) -> Result<PreflightResult, AppError> {
+    let captured = load_latest_capture()
+        .map_err(AppError::Message)?
+        .ok_or_else(|| AppError::Message("Capture a job with the browser extension first.".to_string()))?;
+    let config = AnalysisConfig::from_env().ok_or_else(|| {
+        AppError::Message("OPENAI_API_KEY is required to analyze a resume.".to_string())
+    })?;
+    let analysis = analyze_job(&config, &captured.parsed)
+        .await
+        .map_err(|error| AppError::Message(error.to_string()))?;
+    let root = workspace_root().map_err(|error| AppError::Message(error.to_string()))?;
+    let base_resume = load_base_resume(&root, &language).map_err(|error| AppError::Message(error.to_string()))?;
+    let bank = load_evidence_bank(&root).map_err(|error| AppError::Message(error.to_string()))?;
+    Ok(PreflightResult { items: preflight_items(&analysis, &base_resume, &bank), analysis })
+}
+
+#[tauri::command]
+pub async fn generate_tailored_resume(
+    app: AppHandle,
+    request: GenerateTailoredResumeRequest,
+) -> Result<TailorResponse, AppError> {
+    let captured = load_latest_capture()
+        .map_err(AppError::Message)?
+        .ok_or_else(|| AppError::Message("Capture a job with the browser extension first.".to_string()))?;
+    let root = workspace_root().map_err(|error| AppError::Message(error.to_string()))?;
+    save_selected_evidence(&root, &request.selected_evidence)
+        .map_err(|error| AppError::Message(error.to_string()))?;
+    let reporter = |event: PipelineProgress| {
+        if let Err(error) = app.emit("resume-pipeline-progress", event) {
+            eprintln!("[pipeline] Failed to emit progress event: {error}");
+        }
+    };
+    tailor_and_render_with_progress(TailorRequest {
+        language: request.language,
+        parsed: captured.parsed,
+        analysis: request.analysis,
+        approved_evidence: selected_for_prompt(&request.selected_evidence),
+    }, Some(&reporter)).await.map_err(|error| AppError::Message(error.to_string()))
+}
+
+#[tauri::command]
+pub fn get_evidence_bank() -> Result<EvidenceBank, AppError> {
+    let root = workspace_root().map_err(|error| AppError::Message(error.to_string()))?;
+    load_evidence_bank(&root).map_err(|error| AppError::Message(error.to_string()))
+}
+
+#[tauri::command]
+pub fn remove_evidence_bank_entry(term: String) -> Result<EvidenceBank, AppError> {
+    let root = workspace_root().map_err(|error| AppError::Message(error.to_string()))?;
+    remove_evidence(&root, &term).map_err(|error| AppError::Message(error.to_string()))
 }
 
 fn latest_generated(language: &str, extension: &str) -> Result<std::path::PathBuf, AppError> {

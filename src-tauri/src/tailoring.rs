@@ -1,4 +1,4 @@
-use crate::analysis::JobAnalysis;
+use crate::{analysis::JobAnalysis, evidence::EvidenceEntry};
 use reqwest::StatusCode;
 use serde::{Deserialize, Serialize};
 use std::{
@@ -88,6 +88,8 @@ pub struct TailorRequest {
     pub language: String,
     pub parsed: serde_json::Value,
     pub analysis: JobAnalysis,
+    #[serde(default)]
+    pub approved_evidence: Vec<EvidenceEntry>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -100,6 +102,8 @@ pub struct TailorResponse {
     pub latest_docx_path: Option<String>,
     pub pdf_path: Option<String>,
     pub latest_pdf_path: Option<String>,
+    pub downloads_pdf_path: Option<String>,
+    pub downloads_error: Option<String>,
     pub report_json_path: Option<String>,
     pub validation_status: &'static str,
     pub fit_status: &'static str,
@@ -148,11 +152,13 @@ pub fn build_tailoring_prompt(
     parsed_job: &serde_json::Value,
     analysis: &JobAnalysis,
     base_resume: &serde_json::Value,
+    approved_evidence: &[EvidenceEntry],
     concise: bool,
 ) -> String {
     let parsed_job = serde_json::to_string(parsed_job).unwrap_or_else(|_| "{}".to_string());
     let analysis = serde_json::to_string(analysis).unwrap_or_else(|_| "{}".to_string());
     let base_resume = serde_json::to_string(base_resume).unwrap_or_else(|_| "{}".to_string());
+    let approved_evidence = serde_json::to_string(approved_evidence).unwrap_or_else(|_| "[]".to_string());
 
     let concise_instruction = if concise {
         "The preceding attempt overflowed to a second page. Keep every bullet and every factual claim, but rewrite the editable text more compactly: remove repetition, use concise verbs, and prefer compact ATS terminology. Do not shorten by deleting responsibilities or achievements.\n\n"
@@ -166,13 +172,15 @@ pub fn build_tailoring_prompt(
          Rewrite only experience bullet text and skills strings.\n\
          Do not change meta, company names, locations, titles, dates, job order, number of jobs, number of bullets, or skill keys.\n\
          Aggressively incorporate ATS keywords, tools, responsibility phrases, and domain wording when the base resume supports them.\n\
+         User-attested evidence may support a skills string. Use it in an experience bullet only when its proof_note explicitly names a matching role or project; never infer a responsibility from a term alone.\n\
          Do not invent credentials, employers, tools, metrics, responsibilities, education, certifications, or experience.\n\
-         Put important job keywords without resume evidence into omitted_unsupported_keywords instead of adding them to the resume.\n\
+         Put important job keywords without base-resume or user-attested evidence into omitted_unsupported_keywords instead of adding them to the resume.\n\
          Keep each rewritten bullet close to the original length so the locked DOCX layout remains stable.\n\n\
          {concise_instruction}\
          Normalized job JSON:\n{parsed_job}\n\n\
          ATS analysis JSON:\n{analysis}\n\n\
-         Base resume JSON:\n{base_resume}"
+         Base resume JSON:\n{base_resume}\n\n\
+         User-attested evidence bank entries:\n{approved_evidence}"
     )
 }
 
@@ -259,6 +267,7 @@ pub fn build_tailoring_request(
     parsed_job: &serde_json::Value,
     analysis: &JobAnalysis,
     base_resume: &serde_json::Value,
+    approved_evidence: &[EvidenceEntry],
     concise: bool,
 ) -> serde_json::Value {
     serde_json::json!({
@@ -270,7 +279,7 @@ pub fn build_tailoring_request(
             },
             {
                 "role": "user",
-                "content": build_tailoring_prompt(language, parsed_job, analysis, base_resume, concise)
+                "content": build_tailoring_prompt(language, parsed_job, analysis, base_resume, approved_evidence, concise)
             }
         ],
         "text": {
@@ -290,6 +299,7 @@ pub async fn tailor_resume(
     parsed_job: &serde_json::Value,
     analysis: &JobAnalysis,
     base_resume: &serde_json::Value,
+    approved_evidence: &[EvidenceEntry],
     concise: bool,
 ) -> Result<TailoredResume, TailoringError> {
     validate_language(language)?;
@@ -300,6 +310,7 @@ pub async fn tailor_resume(
         parsed_job,
         analysis,
         base_resume,
+        approved_evidence,
         concise,
     );
     let url = format!("{}/responses", config.base_url.trim_end_matches('/'));
@@ -709,6 +720,24 @@ fn publish_latest_docx(
     Ok(latest_docx_path)
 }
 
+fn downloads_pdf_path(language: &str) -> Result<PathBuf, TailoringError> {
+    validate_language(language)?;
+    let home = std::env::var_os("USERPROFILE")
+        .or_else(|| std::env::var_os("HOME"))
+        .ok_or_else(|| TailoringError::Io("Could not determine the user home directory for Downloads.".to_string()))?;
+    Ok(PathBuf::from(home)
+        .join("Downloads")
+        .join(format!("Xevier_T_CV_{language}.pdf")))
+}
+
+fn publish_downloads_pdf(pdf_path: &Path, language: &str) -> Result<PathBuf, TailoringError> {
+    let destination = downloads_pdf_path(language)?;
+    std::fs::create_dir_all(destination.parent().expect("Downloads path has a parent"))
+        .map_err(|error| TailoringError::Io(error.to_string()))?;
+    std::fs::copy(pdf_path, &destination).map_err(|error| TailoringError::Io(error.to_string()))?;
+    Ok(destination)
+}
+
 #[allow(clippy::too_many_arguments)]
 fn partial_docx_response(
     root: &Path,
@@ -732,6 +761,8 @@ fn partial_docx_response(
         latest_docx_path: Some(relative_path(root, &latest_docx_path)),
         pdf_path: pdf_path.exists().then(|| relative_path(root, pdf_path)),
         latest_pdf_path: None,
+        downloads_pdf_path: None,
+        downloads_error: None,
         report_json_path: Some(relative_path(root, report_json_path)),
         validation_status: "passed",
         fit_status: "failed",
@@ -816,6 +847,7 @@ pub async fn tailor_and_render_with_progress(
             &request.parsed,
             &request.analysis,
             &base_resume,
+            &request.approved_evidence,
             attempt_index > 0,
         )
         .await
@@ -993,6 +1025,13 @@ pub async fn tailor_and_render_with_progress(
                     "PDF exported and confirmed at one page.",
                     Some(attempt),
                 );
+                let (downloads_pdf_path, downloads_error) = match publish_downloads_pdf(&latest_pdf_path, language) {
+                    Ok(path) => (Some(path.to_string_lossy().to_string()), None),
+                    Err(error) => {
+                        eprintln!("[downloads] Failed to publish PDF: {error}");
+                        (None, Some(error.to_string()))
+                    }
+                };
                 progress(
                     reporter,
                     "complete",
@@ -1009,6 +1048,8 @@ pub async fn tailor_and_render_with_progress(
                     latest_docx_path: None,
                     pdf_path: Some(relative_path(&root, &pdf_path)),
                     latest_pdf_path: Some(relative_path(&root, &latest_pdf_path)),
+                    downloads_pdf_path,
+                    downloads_error,
                     report_json_path: Some(relative_path(&root, &report_json_path)),
                     validation_status: "passed",
                     fit_status: "passed",
@@ -1108,6 +1149,8 @@ pub fn failed_response(error: String) -> TailorResponse {
         latest_docx_path: None,
         pdf_path: None,
         latest_pdf_path: None,
+        downloads_pdf_path: None,
+        downloads_error: None,
         report_json_path: None,
         validation_status: "not_run",
         fit_status: "not_run",
@@ -1185,6 +1228,7 @@ mod tests {
             &json!({"title": "Rust Engineer"}),
             &analysis(),
             &base_resume(),
+            &[],
             false,
         );
 
@@ -1202,7 +1246,7 @@ mod tests {
 
     #[test]
     fn concise_retry_prompt_preserves_content_constraints() {
-        let prompt = build_tailoring_prompt("en", &json!({}), &analysis(), &base_resume(), true);
+        let prompt = build_tailoring_prompt("en", &json!({}), &analysis(), &base_resume(), &[], true);
         assert!(prompt.contains("overflowed to a second page"));
         assert!(prompt.contains("Do not shorten by deleting responsibilities"));
     }
