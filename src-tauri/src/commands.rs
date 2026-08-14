@@ -2,10 +2,11 @@ use crate::{
     analysis::{analyze_job, AnalysisConfig, JobAnalysis},
     error::AppError,
     server::{load_latest_capture, CapturedJob},
-    tailoring::{tailor_and_render, TailorRequest, TailorResponse},
+    tailoring::{tailor_and_render_with_progress, PipelineProgress, TailorRequest, TailorResponse},
 };
 use serde::Serialize;
 use std::{path::Path, process::Command};
+use tauri::{AppHandle, Emitter};
 
 #[tauri::command]
 pub fn ping() -> Result<String, AppError> {
@@ -24,29 +25,81 @@ pub struct PipelineResult {
 }
 
 #[tauri::command]
-pub async fn run_resume_pipeline(language: String) -> Result<PipelineResult, AppError> {
+pub async fn run_resume_pipeline(
+    app: AppHandle,
+    language: String,
+) -> Result<PipelineResult, AppError> {
+    let reporter = |event: PipelineProgress| {
+        if let Err(error) = app.emit("resume-pipeline-progress", event) {
+            eprintln!("[pipeline] Failed to emit progress event: {error}");
+        }
+    };
     let captured = load_latest_capture()
         .map_err(AppError::Message)?
         .ok_or_else(|| {
             AppError::Message("Capture a job with the browser extension first.".to_string())
         })?;
-    let config = AnalysisConfig::from_env().ok_or_else(|| {
-        AppError::Message("OPENAI_API_KEY is required to analyze and tailor a resume.".to_string())
-    })?;
-    let analysis = analyze_job(&config, &captured.parsed)
-        .await
-        .map_err(|error| AppError::Message(error.to_string()))?;
-    let resume = tailor_and_render(TailorRequest {
-        language,
-        parsed: captured.parsed,
-        analysis: analysis.clone(),
-    })
+    reporter(PipelineProgress {
+        stage: "ats_analysis",
+        status: "started",
+        message: "AI is analyzing ATS keywords, requirements, and role signals.".to_string(),
+        attempt: None,
+        total_attempts: None,
+    });
+    let config = match AnalysisConfig::from_env() {
+        Some(config) => config,
+        None => {
+            let message = "OPENAI_API_KEY is required to analyze and tailor a resume.".to_string();
+            reporter(PipelineProgress {
+                stage: "ats_analysis",
+                status: "failed",
+                message: message.clone(),
+                attempt: None,
+                total_attempts: None,
+            });
+            return Err(AppError::Message(message));
+        }
+    };
+    let analysis = match analyze_job(&config, &captured.parsed).await {
+        Ok(analysis) => analysis,
+        Err(error) => {
+            let message = error.to_string();
+            reporter(PipelineProgress {
+                stage: "ats_analysis",
+                status: "failed",
+                message: message.clone(),
+                attempt: None,
+                total_attempts: None,
+            });
+            return Err(AppError::Message(message));
+        }
+    };
+    reporter(PipelineProgress {
+        stage: "ats_analysis",
+        status: "completed",
+        message: "ATS analysis completed.".to_string(),
+        attempt: None,
+        total_attempts: None,
+    });
+    let resume = tailor_and_render_with_progress(
+        TailorRequest {
+            language: language.clone(),
+            parsed: captured.parsed,
+            analysis: analysis.clone(),
+        },
+        Some(&reporter),
+    )
     .await
     .map_err(|error| AppError::Message(error.to_string()))?;
+    if resume.tailoring_status == "partial" {
+        if let Err(error) = launch_path(&latest_docx(&language)?, false) {
+            eprintln!("[pipeline] Failed to open validated DOCX: {error}");
+        }
+    }
     Ok(PipelineResult { analysis, resume })
 }
 
-fn latest_pdf(language: &str) -> Result<std::path::PathBuf, AppError> {
+fn latest_generated(language: &str, extension: &str) -> Result<std::path::PathBuf, AppError> {
     if !matches!(language, "en" | "fr") {
         return Err(AppError::Message("Language must be en or fr.".to_string()));
     }
@@ -55,13 +108,22 @@ fn latest_pdf(language: &str) -> Result<std::path::PathBuf, AppError> {
     let path = root
         .join("resume")
         .join("generated")
-        .join(format!("Xevier_T_CV_{language}.pdf"));
+        .join(format!("Xevier_T_CV_{language}.{extension}"));
     if !path.exists() {
-        return Err(AppError::Message(
-            "No generated PDF exists for this language yet.".to_string(),
-        ));
+        return Err(AppError::Message(format!(
+            "No generated {} exists for this language yet.",
+            extension.to_uppercase()
+        )));
     }
     Ok(path)
+}
+
+fn latest_pdf(language: &str) -> Result<std::path::PathBuf, AppError> {
+    latest_generated(language, "pdf")
+}
+
+fn latest_docx(language: &str) -> Result<std::path::PathBuf, AppError> {
+    latest_generated(language, "docx")
 }
 
 fn launch_path(path: &Path, reveal: bool) -> Result<(), AppError> {
@@ -105,4 +167,14 @@ pub fn open_latest_pdf(language: String) -> Result<(), AppError> {
 #[tauri::command]
 pub fn reveal_latest_pdf(language: String) -> Result<(), AppError> {
     launch_path(&latest_pdf(&language)?, true)
+}
+
+#[tauri::command]
+pub fn open_latest_docx(language: String) -> Result<(), AppError> {
+    launch_path(&latest_docx(&language)?, false)
+}
+
+#[tauri::command]
+pub fn reveal_latest_docx(language: String) -> Result<(), AppError> {
+    launch_path(&latest_docx(&language)?, true)
 }

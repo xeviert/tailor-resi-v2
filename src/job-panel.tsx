@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react';
+import { Fragment, type ReactNode } from 'react';
 
 export type JobData = Record<string, unknown>;
 
@@ -46,9 +46,9 @@ function renderHtmlNode(node: Node, key: string): ReactNode {
     case 'br': return <br key={key} />;
     case 'a': {
       const href = safeUrl(element.getAttribute('href'));
-      return href ? <a key={key} href={href} target="_blank" rel="noreferrer">{children}</a> : <>{children}</>;
+      return href ? <a key={key} href={href} target="_blank" rel="noreferrer">{children}</a> : <Fragment key={key}>{children}</Fragment>;
     }
-    default: return <>{children}</>;
+    default: return <Fragment key={key}>{children}</Fragment>;
   }
 }
 

@@ -19,7 +19,9 @@ pub fn run() {
             commands::get_latest_job,
             commands::run_resume_pipeline,
             commands::open_latest_pdf,
-            commands::reveal_latest_pdf
+            commands::reveal_latest_pdf,
+            commands::open_latest_docx,
+            commands::reveal_latest_docx
         ])
         .setup(|app| {
             // Auto-open DevTools in debug builds

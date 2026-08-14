@@ -483,6 +483,10 @@ function Archive-Variant([string]$LangCode, [string]$VariantPath, [string]$Compa
   Write-Host "[archive] wrote $dest"
 }
 
+function Quote-ProcessArgument([string]$Value) {
+  return '"' + $Value.Replace('"', '\"') + '"'
+}
+
 function Export-Pdf([string]$DocxPath, [string]$OutDir) {
   $knownPath = if ([System.IO.Path]::DirectorySeparatorChar -eq '\') { 'C:\Program Files\LibreOffice\program\soffice.com' } else { $null }
   $soffice = if ($knownPath -and (Test-Path $knownPath)) { Get-Item $knownPath } else { Get-Command soffice -ErrorAction SilentlyContinue }
@@ -496,15 +500,34 @@ function Export-Pdf([string]$DocxPath, [string]$OutDir) {
   New-Item -ItemType Directory -Force -Path $profile | Out-Null
   try {
     $profileUri = 'file:///' + ($profile -replace '\\','/')
-    $process = Start-Process -FilePath $sofficePath -ArgumentList @(
+    $arguments = @(
       "-env:UserInstallation=$profileUri", '--headless', '--convert-to', 'pdf', '--outdir', $OutDir, $DocxPath
-    ) -PassThru -NoNewWindow
+    ) | ForEach-Object { Quote-ProcessArgument ([string]$_) }
+    $startInfo = New-Object System.Diagnostics.ProcessStartInfo
+    $startInfo.FileName = $sofficePath
+    $startInfo.Arguments = $arguments -join ' '
+    $startInfo.UseShellExecute = $false
+    $startInfo.CreateNoWindow = $true
+    $startInfo.RedirectStandardOutput = $true
+    $startInfo.RedirectStandardError = $true
+    $process = New-Object System.Diagnostics.Process
+    $process.StartInfo = $startInfo
+    if (!$process.Start()) { throw 'LibreOffice PDF export process could not be started.' }
     if (!$process.WaitForExit(30000)) {
-      Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
+      try { $process.Kill() } catch {}
       throw 'LibreOffice PDF export timed out after 30 seconds.'
     }
+    $stdout = $process.StandardOutput.ReadToEnd().Trim()
+    $stderr = $process.StandardError.ReadToEnd().Trim()
+    $diagnostic = @($stdout, $stderr) | Where-Object { $_ } | Select-Object -Unique
+    if ($stdout) { Write-Host $stdout }
+    if ($process.ExitCode -ne 0) {
+      throw "LibreOffice PDF export failed with exit code $($process.ExitCode): $($diagnostic -join ' ')"
+    }
     $exportedPdf = Join-Path $OutDir ([System.IO.Path]::GetFileNameWithoutExtension($DocxPath) + '.pdf')
-    if (!(Test-Path $exportedPdf)) { throw 'LibreOffice PDF export completed without producing a PDF.' }
+    if (!(Test-Path $exportedPdf)) {
+      throw "LibreOffice PDF export completed without producing a PDF. $($diagnostic -join ' ')"
+    }
   } finally {
     if (Test-Path $profile) { Remove-Item -LiteralPath $profile -Recurse -Force }
   }

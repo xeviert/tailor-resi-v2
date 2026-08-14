@@ -7,6 +7,38 @@ use std::{
     process::Command,
 };
 
+const MAX_COMPANY_ROLE_SLUG_LEN: usize = 64;
+const MAX_TAILORING_ATTEMPTS: usize = 3;
+
+#[derive(Clone, Debug, Serialize)]
+pub struct PipelineProgress {
+    pub stage: &'static str,
+    pub status: &'static str,
+    pub message: String,
+    pub attempt: Option<usize>,
+    pub total_attempts: Option<usize>,
+}
+
+type ProgressReporter<'a> = Option<&'a (dyn Fn(PipelineProgress) + Send + Sync)>;
+
+fn progress(
+    reporter: ProgressReporter<'_>,
+    stage: &'static str,
+    status: &'static str,
+    message: impl Into<String>,
+    attempt: Option<usize>,
+) {
+    if let Some(reporter) = reporter {
+        reporter(PipelineProgress {
+            stage,
+            status,
+            message: message.into(),
+            attempt,
+            total_attempts: attempt.map(|_| MAX_TAILORING_ATTEMPTS),
+        });
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct TailoringConfig {
     pub api_key: String,
@@ -65,6 +97,7 @@ pub struct TailorResponse {
     pub variant_slug: Option<String>,
     pub variant_json_path: Option<String>,
     pub docx_path: Option<String>,
+    pub latest_docx_path: Option<String>,
     pub pdf_path: Option<String>,
     pub latest_pdf_path: Option<String>,
     pub report_json_path: Option<String>,
@@ -455,8 +488,10 @@ pub fn company_role_slug(
     } else {
         analysis.role_target.as_str()
     };
-    let raw = format!("{company}-{role}-{language}");
-    slugify(&raw)
+    let base = slugify(&format!("{company}-{role}"));
+    let language_suffix = format!("-{language}");
+    let base_limit = MAX_COMPANY_ROLE_SLUG_LEN.saturating_sub(language_suffix.len());
+    format!("{}{}", bounded_slug(&base, base_limit), language_suffix)
 }
 
 pub fn slugify(value: &str) -> String {
@@ -479,6 +514,26 @@ pub fn slugify(value: &str) -> String {
     } else {
         slug
     }
+}
+
+fn bounded_slug(slug: &str, max_len: usize) -> String {
+    if slug.len() <= max_len {
+        return slug.to_string();
+    }
+    let hash = fnv1a_32(slug.as_bytes());
+    let hash_suffix = format!("-{hash:08x}");
+    let prefix_len = max_len.saturating_sub(hash_suffix.len());
+    let prefix = slug[..prefix_len].trim_matches('-');
+    format!("{prefix}{hash_suffix}")
+}
+
+fn fnv1a_32(bytes: &[u8]) -> u32 {
+    let mut hash = 0x811c9dc5u32;
+    for byte in bytes {
+        hash ^= u32::from(*byte);
+        hash = hash.wrapping_mul(0x01000193);
+    }
+    hash
 }
 
 fn today_prefix() -> Result<String, TailoringError> {
@@ -526,7 +581,7 @@ pub fn write_variant_files(
 
     let variant_json_path = variant_dir.join("variant.json");
     let report_json_path = variant_dir.join("tailoring-report.json");
-    let docx_path = variant_dir.join(format!("Xevier_T_CV_{language}.{variant_slug}.docx"));
+    let docx_path = variant_dir.join(format!("Xevier_T_CV_{language}.docx"));
 
     write_json(&variant_json_path, &tailored.content)?;
     write_json(&report_json_path, &tailored.report)?;
@@ -540,7 +595,7 @@ fn write_json<T: Serialize>(path: &Path, value: &T) -> Result<(), TailoringError
     std::fs::write(path, format!("{json}\n")).map_err(|error| TailoringError::Io(error.to_string()))
 }
 
-pub fn render_and_validate(
+fn render_resume(
     root: &Path,
     language: &str,
     variant_json_path: &Path,
@@ -567,6 +622,18 @@ pub fn render_and_validate(
         return Err(TailoringError::Render(command_output(&render)));
     }
 
+    Ok(())
+}
+
+fn validate_rendered_resume(
+    root: &Path,
+    language: &str,
+    docx_path: &Path,
+) -> Result<(), TailoringError> {
+    let script = root
+        .join("resume")
+        .join("scripts")
+        .join("ResumeWorkbench.ps1");
     let validate = powershell_command()
         .arg("-File")
         .arg(&script)
@@ -626,6 +693,54 @@ fn check_one_page_fit(
     }
 }
 
+fn publish_latest_docx(
+    root: &Path,
+    language: &str,
+    docx_path: &Path,
+) -> Result<PathBuf, TailoringError> {
+    let latest_docx_path = root
+        .join("resume")
+        .join("generated")
+        .join(format!("Xevier_T_CV_{language}.docx"));
+    std::fs::create_dir_all(latest_docx_path.parent().unwrap())
+        .map_err(|error| TailoringError::Io(error.to_string()))?;
+    std::fs::copy(docx_path, &latest_docx_path)
+        .map_err(|error| TailoringError::Io(error.to_string()))?;
+    Ok(latest_docx_path)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn partial_docx_response(
+    root: &Path,
+    language: &str,
+    variant_slug: String,
+    variant_json_path: &Path,
+    report_json_path: &Path,
+    docx_path: &Path,
+    pdf_path: &Path,
+    page_count: Option<u32>,
+    report: TailoringReport,
+    error: String,
+) -> Result<TailorResponse, TailoringError> {
+    let latest_docx_path = publish_latest_docx(root, language, docx_path)?;
+    Ok(TailorResponse {
+        success: false,
+        tailoring_status: "partial",
+        variant_slug: Some(variant_slug),
+        variant_json_path: Some(relative_path(root, variant_json_path)),
+        docx_path: Some(relative_path(root, docx_path)),
+        latest_docx_path: Some(relative_path(root, &latest_docx_path)),
+        pdf_path: pdf_path.exists().then(|| relative_path(root, pdf_path)),
+        latest_pdf_path: None,
+        report_json_path: Some(relative_path(root, report_json_path)),
+        validation_status: "passed",
+        fit_status: "failed",
+        page_count,
+        report: Some(report),
+        error: Some(error),
+    })
+}
+
 fn powershell_command() -> Command {
     #[cfg(target_os = "windows")]
     {
@@ -642,49 +757,256 @@ fn powershell_command() -> Command {
 }
 
 pub async fn tailor_and_render(request: TailorRequest) -> Result<TailorResponse, TailoringError> {
+    tailor_and_render_with_progress(request, None).await
+}
+
+pub async fn tailor_and_render_with_progress(
+    request: TailorRequest,
+    reporter: Option<&(dyn Fn(PipelineProgress) + Send + Sync)>,
+) -> Result<TailorResponse, TailoringError> {
     let language = request.language.as_str();
-    let root = workspace_root()?;
-    let base_resume = load_base_resume(&root, language)?;
+    let root = workspace_root().map_err(|error| {
+        progress(
+            reporter,
+            "resume_tailoring",
+            "failed",
+            error.to_string(),
+            Some(1),
+        );
+        error
+    })?;
+    let base_resume = load_base_resume(&root, language).map_err(|error| {
+        progress(
+            reporter,
+            "resume_tailoring",
+            "failed",
+            error.to_string(),
+            Some(1),
+        );
+        error
+    })?;
     let config = TailoringConfig::from_env().ok_or_else(|| {
-        TailoringError::Request("OPENAI_API_KEY is required for tailoring".to_string())
+        let error = TailoringError::Request("OPENAI_API_KEY is required for tailoring".to_string());
+        progress(
+            reporter,
+            "resume_tailoring",
+            "failed",
+            error.to_string(),
+            Some(1),
+        );
+        error
     })?;
     let mut page_counts = Vec::new();
-    for attempt in 0..3 {
-        let tailored = tailor_resume(
+    for attempt_index in 0..MAX_TAILORING_ATTEMPTS {
+        let attempt = attempt_index + 1;
+        progress(
+            reporter,
+            "resume_tailoring",
+            "started",
+            if attempt == 1 {
+                "AI is tailoring supported resume content to the job."
+            } else {
+                "AI is making the resume more concise for a one-page fit."
+            },
+            Some(attempt),
+        );
+        let tailored = match tailor_resume(
             &config,
             language,
             &request.parsed,
             &request.analysis,
             &base_resume,
-            attempt > 0,
+            attempt_index > 0,
         )
-        .await?;
-        validate_tailored_content(language, &base_resume, &tailored.content)?;
-        let (variant_slug, variant_json_path, report_json_path, docx_path) = write_variant_files(
-            &root,
-            language,
-            &request.parsed,
-            &request.analysis,
-            &tailored,
-        )?;
-        render_and_validate(&root, language, &variant_json_path, &docx_path)?;
+        .await
+        {
+            Ok(tailored) => tailored,
+            Err(error) => {
+                progress(
+                    reporter,
+                    "resume_tailoring",
+                    "failed",
+                    error.to_string(),
+                    Some(attempt),
+                );
+                return Err(error);
+            }
+        };
+        progress(
+            reporter,
+            "resume_tailoring",
+            "completed",
+            "AI resume tailoring completed.",
+            Some(attempt),
+        );
+
+        progress(
+            reporter,
+            "safety_validation",
+            "started",
+            "Checking factual and locked-layout constraints.",
+            Some(attempt),
+        );
+        if let Err(error) = validate_tailored_content(language, &base_resume, &tailored.content) {
+            progress(
+                reporter,
+                "safety_validation",
+                "failed",
+                error.to_string(),
+                Some(attempt),
+            );
+            return Err(error);
+        }
+        progress(
+            reporter,
+            "safety_validation",
+            "completed",
+            "Tailored content passed safety validation.",
+            Some(attempt),
+        );
+
+        progress(
+            reporter,
+            "variant_write",
+            "started",
+            "Saving the job-specific resume variant.",
+            Some(attempt),
+        );
+        let (variant_slug, variant_json_path, report_json_path, docx_path) =
+            match write_variant_files(
+                &root,
+                language,
+                &request.parsed,
+                &request.analysis,
+                &tailored,
+            ) {
+                Ok(paths) => paths,
+                Err(error) => {
+                    progress(
+                        reporter,
+                        "variant_write",
+                        "failed",
+                        error.to_string(),
+                        Some(attempt),
+                    );
+                    return Err(error);
+                }
+            };
+        progress(
+            reporter,
+            "variant_write",
+            "completed",
+            "Variant JSON and tailoring report saved.",
+            Some(attempt),
+        );
+
+        progress(
+            reporter,
+            "docx_render",
+            "started",
+            "Rendering the locked-layout DOCX resume.",
+            Some(attempt),
+        );
+        if let Err(error) = render_resume(&root, language, &variant_json_path, &docx_path) {
+            progress(
+                reporter,
+                "docx_render",
+                "failed",
+                error.to_string(),
+                Some(attempt),
+            );
+            return Err(error);
+        }
+        progress(
+            reporter,
+            "docx_render",
+            "completed",
+            "DOCX resume rendered.",
+            Some(attempt),
+        );
+
+        progress(
+            reporter,
+            "locked_validation",
+            "started",
+            "Validating locked resume sections.",
+            Some(attempt),
+        );
+        if let Err(error) = validate_rendered_resume(&root, language, &docx_path) {
+            progress(
+                reporter,
+                "locked_validation",
+                "failed",
+                error.to_string(),
+                Some(attempt),
+            );
+            return Err(error);
+        }
+        progress(
+            reporter,
+            "locked_validation",
+            "completed",
+            "Locked resume sections are unchanged.",
+            Some(attempt),
+        );
+
         let pdf_path = docx_path.with_extension("pdf");
+        progress(
+            reporter,
+            "pdf_fit",
+            "started",
+            "Exporting PDF and checking the one-page fit.",
+            Some(attempt),
+        );
         match check_one_page_fit(&root, &docx_path, &pdf_path) {
             Ok(page_count) => {
                 let latest_pdf_path = root
                     .join("resume")
                     .join("generated")
                     .join(format!("Xevier_T_CV_{language}.pdf"));
-                std::fs::create_dir_all(latest_pdf_path.parent().unwrap())
-                    .map_err(|error| TailoringError::Io(error.to_string()))?;
-                std::fs::copy(&pdf_path, &latest_pdf_path)
-                    .map_err(|error| TailoringError::Io(error.to_string()))?;
+                if let Err(error) = std::fs::create_dir_all(latest_pdf_path.parent().unwrap()) {
+                    let error = TailoringError::Io(error.to_string());
+                    progress(
+                        reporter,
+                        "pdf_fit",
+                        "failed",
+                        error.to_string(),
+                        Some(attempt),
+                    );
+                    return Err(error);
+                }
+                if let Err(error) = std::fs::copy(&pdf_path, &latest_pdf_path) {
+                    let error = TailoringError::Io(error.to_string());
+                    progress(
+                        reporter,
+                        "pdf_fit",
+                        "failed",
+                        error.to_string(),
+                        Some(attempt),
+                    );
+                    return Err(error);
+                }
+                progress(
+                    reporter,
+                    "pdf_fit",
+                    "completed",
+                    "PDF exported and confirmed at one page.",
+                    Some(attempt),
+                );
+                progress(
+                    reporter,
+                    "complete",
+                    "completed",
+                    "Resume pipeline completed successfully.",
+                    Some(attempt),
+                );
                 return Ok(TailorResponse {
                     success: true,
                     tailoring_status: "completed",
                     variant_slug: Some(variant_slug),
                     variant_json_path: Some(relative_path(&root, &variant_json_path)),
                     docx_path: Some(relative_path(&root, &docx_path)),
+                    latest_docx_path: None,
                     pdf_path: Some(relative_path(&root, &pdf_path)),
                     latest_pdf_path: Some(relative_path(&root, &latest_pdf_path)),
                     report_json_path: Some(relative_path(&root, &report_json_path)),
@@ -698,14 +1020,82 @@ pub async fn tailor_and_render(request: TailorRequest) -> Result<TailorResponse,
             Err(TailoringError::OnePageFit {
                 page_counts: counts,
                 ..
-            }) => page_counts.extend(counts),
-            Err(error) => return Err(error),
+            }) => {
+                page_counts.extend(counts);
+                if attempt < MAX_TAILORING_ATTEMPTS {
+                    progress(
+                        reporter,
+                        "pdf_fit",
+                        "retrying",
+                        "Resume exceeded one page; starting a concise rewrite.",
+                        Some(attempt),
+                    );
+                } else {
+                    let error = TailoringError::OnePageFit {
+                        attempts: MAX_TAILORING_ATTEMPTS,
+                        page_counts: page_counts.clone(),
+                    };
+                    progress(
+                        reporter,
+                        "pdf_fit",
+                        "failed",
+                        error.to_string(),
+                        Some(attempt),
+                    );
+                    let response = partial_docx_response(
+                        &root,
+                        language,
+                        variant_slug,
+                        &variant_json_path,
+                        &report_json_path,
+                        &docx_path,
+                        &pdf_path,
+                        page_counts.last().copied(),
+                        tailored.report,
+                        error.to_string(),
+                    )?;
+                    progress(
+                        reporter,
+                        "complete",
+                        "completed",
+                        "Validated DOCX saved; PDF is not ready.",
+                        Some(attempt),
+                    );
+                    return Ok(response);
+                }
+            }
+            Err(error) => {
+                progress(
+                    reporter,
+                    "pdf_fit",
+                    "failed",
+                    error.to_string(),
+                    Some(attempt),
+                );
+                let response = partial_docx_response(
+                    &root,
+                    language,
+                    variant_slug,
+                    &variant_json_path,
+                    &report_json_path,
+                    &docx_path,
+                    &pdf_path,
+                    None,
+                    tailored.report,
+                    error.to_string(),
+                )?;
+                progress(
+                    reporter,
+                    "complete",
+                    "completed",
+                    "Validated DOCX saved; PDF is not ready.",
+                    Some(attempt),
+                );
+                return Ok(response);
+            }
         }
     }
-    Err(TailoringError::OnePageFit {
-        attempts: 3,
-        page_counts,
-    })
+    unreachable!("the tailoring loop returns on its final attempt")
 }
 
 pub fn failed_response(error: String) -> TailorResponse {
@@ -715,6 +1105,7 @@ pub fn failed_response(error: String) -> TailorResponse {
         variant_slug: None,
         variant_json_path: None,
         docx_path: None,
+        latest_docx_path: None,
         pdf_path: None,
         latest_pdf_path: None,
         report_json_path: None,
@@ -736,8 +1127,10 @@ fn relative_path(root: &Path, path: &Path) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        build_tailoring_prompt, civil_date_from_days, parse_tailored_resume_from_response, slugify,
-        validate_tailored_content, TailoringReport,
+        build_tailoring_prompt, civil_date_from_days, company_role_slug,
+        parse_tailored_resume_from_response, partial_docx_response, slugify,
+        validate_tailored_content, write_variant_files, TailoredResume, TailoringReport,
+        MAX_COMPANY_ROLE_SLUG_LEN,
     };
     use crate::analysis::{JobAnalysis, KeywordSignal};
     use serde_json::json;
@@ -889,5 +1282,111 @@ mod tests {
             slugify("Acme AI / Senior Rust Engineer en"),
             "acme-ai-senior-rust-engineer-en"
         );
+    }
+
+    #[test]
+    fn long_company_role_slugs_are_bounded_and_deterministic() {
+        let parsed = json!({ "company": "Spendesk" });
+        let mut first = analysis();
+        first.role_target = "Backend Software Engineer IC3 focused on backend foundations for AI-native conversational and agentic product experiences at Spendesk".to_string();
+        let first_slug = company_role_slug(&parsed, &first, "en");
+        let repeated_slug = company_role_slug(&parsed, &first, "en");
+        let mut second = first.clone();
+        second.role_target.push_str(" with a distinct ending");
+        let second_slug = company_role_slug(&parsed, &second, "en");
+
+        assert!(first_slug.len() <= MAX_COMPANY_ROLE_SLUG_LEN);
+        assert!(first_slug.ends_with("-en"));
+        assert_eq!(first_slug, repeated_slug);
+        assert_ne!(first_slug, second_slug);
+    }
+
+    #[test]
+    fn variant_docx_filename_does_not_repeat_the_slug() {
+        let suffix = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("resume-variant-path-{suffix}"));
+        let parsed = json!({ "company": "Spendesk" });
+        let mut job_analysis = analysis();
+        job_analysis.role_target = "Backend Software Engineer IC3 focused on backend foundations for AI-native conversational and agentic product experiences at Spendesk".to_string();
+        let tailored = TailoredResume {
+            content: base_resume(),
+            report: TailoringReport {
+                covered_keywords: vec![],
+                omitted_unsupported_keywords: vec![],
+                changed_fields: vec![],
+                safety_notes: vec![],
+                estimated_ats_coverage_score: 80,
+            },
+        };
+
+        let (variant_slug, _, _, docx_path) =
+            write_variant_files(&root, "en", &parsed, &job_analysis, &tailored).unwrap();
+
+        assert!(variant_slug.len() <= 11 + MAX_COMPANY_ROLE_SLUG_LEN);
+        assert_eq!(docx_path.file_name().unwrap(), "Xevier_T_CV_en.docx");
+        assert!(docx_path.to_string_lossy().len() < 240);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn partial_result_publishes_a_distinct_stable_docx() {
+        let suffix = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("resume-partial-result-{suffix}"));
+        let variant_dir = root.join("resume/variants/test-en");
+        let generated_dir = root.join("resume/generated");
+        std::fs::create_dir_all(&variant_dir).unwrap();
+        std::fs::create_dir_all(&generated_dir).unwrap();
+        let docx_path = variant_dir.join("Xevier_T_CV_en.docx");
+        let variant_json_path = variant_dir.join("variant.json");
+        let report_json_path = variant_dir.join("tailoring-report.json");
+        let pdf_path = variant_dir.join("Xevier_T_CV_en.pdf");
+        let generated_template_output = generated_dir.join("Xevier_T_CV_en.generated.docx");
+        std::fs::write(&docx_path, b"validated tailored docx").unwrap();
+        std::fs::write(&variant_json_path, b"{}").unwrap();
+        std::fs::write(&report_json_path, b"{}").unwrap();
+        std::fs::write(&generated_template_output, b"existing generated output").unwrap();
+
+        let response = partial_docx_response(
+            &root,
+            "en",
+            "test-en".to_string(),
+            &variant_json_path,
+            &report_json_path,
+            &docx_path,
+            &pdf_path,
+            None,
+            TailoringReport {
+                covered_keywords: vec![],
+                omitted_unsupported_keywords: vec![],
+                changed_fields: vec![],
+                safety_notes: vec![],
+                estimated_ats_coverage_score: 80,
+            },
+            "PDF export failed".to_string(),
+        )
+        .unwrap();
+
+        assert_eq!(response.tailoring_status, "partial");
+        assert_eq!(response.validation_status, "passed");
+        assert_eq!(response.fit_status, "failed");
+        assert_eq!(
+            response.latest_docx_path.as_deref(),
+            Some("resume/generated/Xevier_T_CV_en.docx")
+        );
+        assert_eq!(
+            std::fs::read(generated_dir.join("Xevier_T_CV_en.docx")).unwrap(),
+            b"validated tailored docx"
+        );
+        assert_eq!(
+            std::fs::read(generated_template_output).unwrap(),
+            b"existing generated output"
+        );
+        std::fs::remove_dir_all(root).unwrap();
     }
 }
