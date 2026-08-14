@@ -1,0 +1,12 @@
+﻿{
+    "receivedAt":  "2026-08-14T12:33:44.2035470Z",
+    "sourceUrl":  "https://example.com/job",
+    "pageTitle":  "Example Job",
+    "score":  42,
+    "capturedCount":  1,
+    "json":  {
+                 "title":  "Software Engineer",
+                 "description":  "Build things.",
+                 "company":  "Acme"
+             }
+}

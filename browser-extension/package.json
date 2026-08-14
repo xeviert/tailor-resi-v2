@@ -1,0 +1,10 @@
+{
+  "name": "resi-tailor-extractor",
+  "version": "1.0.0",
+  "private": true,
+  "description": "One-click job posting extractor",
+  "scripts": {
+    "build": "echo 'Build complete - extension ready'",
+    "dev": "echo 'Dev server not required for manual setup'"
+  }
+}

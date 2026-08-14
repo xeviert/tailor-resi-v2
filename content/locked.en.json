@@ -1,0 +1,16 @@
+﻿{
+    "education":  [
+                      "Thinkful - Software Engineering ImmersionAustin, TX",
+                      "University of Houston - DowntownHouston, TX",
+                      "Bachelor of Business Administration - BBA"
+                  ],
+    "header":  [
+                   "Xevier Turrubiartes",
+                   "xevier.dev@gmail.com • xevier.dev • linkedin.com/in/xevierturrubiartes"
+               ],
+    "section_headings":  [
+                             "PROFESSIONAL EXPERIENCE",
+                             "EDUCATION",
+                             "SKILLS"
+                         ]
+}

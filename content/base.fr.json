@@ -1,0 +1,75 @@
+{
+  "meta": {
+    "language": "fr",
+    "type": "base",
+    "template": "Xevier_T_CV_fr.template.docx"
+  },
+  "experience": [
+    {
+      "company": "StealthX",
+      "location": "Télétravail",
+      "title": "Développeur Senior IA / Chef de Projet",
+      "dates": "Janvier 2026 - Présent",
+      "bullets": [
+        "Direction d'une équipe de 2 à 3 ingénieurs dans la conception et le déploiement de plateformes d'IA d'entreprise pour une dizaine de clients, incluant architecture, revues de code, planification des sprints et stratégie de livraison.",
+        "Architecture de systèmes RAG et d'une plateforme IA multi-agents reposant sur Claude, OpenAI, LangChain, LangGraph, ChromaDB et pgvector, réduisant le temps de réponse moyen de 40 %.",
+        "Développement d'un moteur d'analyse documentaire et de données avec Unstructured.io, DuckDB et S3 Parquet, ainsi qu'une intégration HubSpot basée sur la détection d'intention, augmentant de 35 % le taux de conversion lead-to-demo."
+      ]
+    },
+    {
+      "company": "Werq AI",
+      "location": "Télétravail",
+      "title": "Lead Développeur Front-end",
+      "dates": "Mars 2025 - Décembre 2025",
+      "bullets": [
+        "Responsable des initiatives front-end avec React, TypeScript, Tailwind CSS et Framer Motion, concevant des interfaces et composants responsifs tout en réduisant le temps de chargement initial de 25 %.",
+        "Contribution au développement backend avec NestJS afin d'assurer la cohérence technique et l'intégration entre les différentes couches applicatives."
+      ]
+    },
+    {
+      "company": "Advance Music Technologies LLC / Sonicbids LLC",
+      "location": "Télétravail",
+      "title": "Lead Developer Full-Stack",
+      "dates": "Août 2024 - Février 2025",
+      "bullets": [
+        "Pilotage du développement d'une application full-stack avec React, Redux, TypeScript, Node.js, Express et PostgreSQL, livrée de manière autonome du concept au MVP.",
+        "Conception d'API REST et architecture de la gestion d'état avec Redux Toolkit, réduisant les temps de réponse de 25 % et améliorant les performances globales de l'application de 30 %."
+      ]
+    },
+    {
+      "company": "Artificial Compute",
+      "location": "Télétravail",
+      "title": "Développeur Front-end",
+      "dates": "Juin 2023 - Juillet 2024",
+      "bullets": [
+        "Développement de fonctionnalités Next.js/React/Redux ayant augmenté l'engagement utilisateur de 30 %."
+      ]
+    },
+    {
+      "company": "Rodeo Logistics, LLC",
+      "location": "Austin, TX - Télétravail",
+      "title": "Développeur Full-Stack",
+      "dates": "Décembre 2021 - Février 2023",
+      "bullets": [
+        "Création d'outils métier React, TypeScript, GraphQL et Node.js pour moderniser les opérations logistiques."
+      ]
+    },
+    {
+      "company": "DevWorks",
+      "location": "Austin, TX",
+      "title": "Développeur Full-Stack / Chef de projet",
+      "dates": "Mars 2021 - Décembre 2021",
+      "bullets": [
+        "Coordination de projets logiciels et d'équipes de développement, avec 95 % de livraisons dans les délais."
+      ]
+    }
+  ],
+  "skills": {
+    "frontend": "Frontend: React, Next.js, TypeScript, Redux, React Query, Tailwind, Figma",
+    "architecture_backend": "Architecture & Backend: System Design, API Design, Node.js, NestJS, Express, PostgreSQL, REST API, GraphQL",
+    "ai_data": "IA & Données: OpenAI, Claude, LangChain, LangGraph, RAG, LLM Orchestration, Multi-Agent Systems, Embeddings, Vector Search, ChromaDB, pgvector, DuckDB",
+    "testing": "Testing: Playwright, Cypress, Vitest, Jest",
+    "devops": "DevOps: AWS, Docker, CircleCI, Vercel, Fly.io",
+    "tools": "Outils: Bash, Git, JIRA, Postman"
+  }
+}

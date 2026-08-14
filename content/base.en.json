@@ -1,0 +1,76 @@
+{
+  "meta": {
+    "language": "en",
+    "type": "base",
+    "template": "Xevier_T_CV_en.template.docx"
+  },
+  "experience": [
+    {
+      "company": "StealthX",
+      "location": "Charlotte - Remote",
+      "title": "AI Project Lead",
+      "dates": "January 2026 - Present",
+      "bullets": [
+        "Led a team of 2-3 engineers delivering enterprise AI platforms for ~10 clients, overseeing architecture, code reviews, sprint planning, and deployments.",
+        "Built an AI intent-detection system integrated with RAG and HubSpot CRM to identify and qualify sales leads, increasing lead-to-demo conversion by 35%.",
+        "Architected RAG and multi-agent systems using Claude, OpenAI, LangChain, LangGraph, ChromaDB, and pgvector, reducing average response times by 40%.",
+        "Built document ingestion and analytics pipelines with Unstructured.io, DuckDB, and S3 Parquet, enabling AI-generated SQL analysis without impacting production databases."
+      ]
+    },
+    {
+      "company": "Werq AI",
+      "location": "Remote",
+      "title": "Lead Front-end Developer",
+      "dates": "March 2025 - December 2025",
+      "bullets": [
+        "Owned front-end initiatives with React, TypeScript, Tailwind CSS, and Framer Motion, designing responsive interfaces and components while reducing initial load time by 25%.",
+        "Contributed to backend development with NestJS to ensure technical consistency and integration across application layers."
+      ]
+    },
+    {
+      "company": "Advance Music Technologies LLC / Sonicbids LLC",
+      "location": "New York - Remote",
+      "title": "Lead Full-Stack Developer",
+      "dates": "August 2024 - February 2025",
+      "bullets": [
+        "Led development of a full-stack application with React, Redux, TypeScript, Node.js, Express, and PostgreSQL, delivering the product independently from concept to MVP.",
+        "Designed REST APIs and Redux Toolkit state architecture, reducing response times by 25% and improving overall application performance by 30%."
+      ]
+    },
+    {
+      "company": "Artificial Compute",
+      "location": "Remote",
+      "title": "Front-end Developer",
+      "dates": "June 2023 - July 2024",
+      "bullets": [
+        "Developed Next.js/React/Redux features that increased user engagement by 30%."
+      ]
+    },
+    {
+      "company": "Rodeo Logistics, LLC",
+      "location": "Austin, TX - Remote",
+      "title": "Full-Stack Developer",
+      "dates": "December 2021 - February 2023",
+      "bullets": [
+        "Built React, TypeScript, GraphQL, and Node.js business tools to modernize logistics operations."
+      ]
+    },
+    {
+      "company": "DevWorks",
+      "location": "Austin, TX",
+      "title": "Full-Stack Developer / Project Lead",
+      "dates": "March 2021 - December 2021",
+      "bullets": [
+        "Coordinated software projects and development teams, achieving a 95% on-time delivery rate."
+      ]
+    }
+  ],
+  "skills": {
+    "frontend": "Frontend: React, Next.js, TypeScript, Redux, React Query, Tailwind, Figma",
+    "architecture_backend": "Architecture & Backend: System Design, API Design, Node.js, NestJS, Express, PostgreSQL, REST API, GraphQL",
+    "ai_data": "AI & Data: OpenAI, Claude, LangChain, LangGraph, RAG, LLM Orchestration, Multi-Agent Systems, Embeddings, Vector Search, ChromaDB, pgvector, DuckDB",
+    "testing": "Testing: Playwright, Cypress, Vitest, Jest",
+    "devops": "DevOps: AWS, Docker, CircleCI, Vercel, Fly.io",
+    "tools": "Tools: Bash, Git, JIRA, Postman"
+  }
+}
