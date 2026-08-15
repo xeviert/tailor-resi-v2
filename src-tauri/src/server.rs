@@ -1,5 +1,5 @@
 use crate::analysis::{analyze_job, AnalysisConfig, JobAnalysis};
-use crate::tailoring::{failed_response, tailor_and_render, TailorRequest, TailorResponse};
+use crate::tailoring::{failed_response, tailor_and_render, BulletKeywordEmphasis, TailorRequest, TailorResponse};
 use axum::{
     extract::State,
     http::{Method, StatusCode},
@@ -485,6 +485,7 @@ async fn analyze_handler(
                 parsed: parsed.clone(),
                 analysis,
                 approved_evidence: vec![],
+                bullet_keyword_emphasis: BulletKeywordEmphasis::Balanced,
             };
             match tailor_and_render(request).await {
                 Ok(response) => {

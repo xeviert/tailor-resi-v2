@@ -83,6 +83,25 @@ pub struct TailoredResume {
     pub report: TailoringReport,
 }
 
+#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BulletKeywordEmphasis {
+    Low,
+    #[default]
+    Balanced,
+    High,
+}
+
+impl BulletKeywordEmphasis {
+    fn prompt_instruction(self) -> &'static str {
+        match self {
+            Self::Low => "Bullet keyword emphasis is LOW: add supported job language only to the strongest direct bullet matches.\n",
+            Self::Balanced => "Bullet keyword emphasis is BALANCED: before relying on skills-section additions, spread one natural, supported job term or phrase across roughly half of the factually relevant experience bullets.\n",
+            Self::High => "Bullet keyword emphasis is HIGH: spread one natural, supported job term or phrase across every factually relevant experience bullet where possible. Prioritize breadth across bullets over stacking multiple terms into a single bullet.\n",
+        }
+    }
+}
+
 #[derive(Clone, Debug, Deserialize)]
 pub struct TailorRequest {
     pub language: String,
@@ -90,6 +109,8 @@ pub struct TailorRequest {
     pub analysis: JobAnalysis,
     #[serde(default)]
     pub approved_evidence: Vec<EvidenceEntry>,
+    #[serde(default)]
+    pub bullet_keyword_emphasis: BulletKeywordEmphasis,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -108,6 +129,8 @@ pub struct TailorResponse {
     pub validation_status: &'static str,
     pub fit_status: &'static str,
     pub page_count: Option<u32>,
+    pub bullet_keyword_emphasis: BulletKeywordEmphasis,
+    pub experience_bullets_changed: u32,
     pub report: Option<TailoringReport>,
     pub error: Option<String>,
 }
@@ -153,6 +176,7 @@ pub fn build_tailoring_prompt(
     analysis: &JobAnalysis,
     base_resume: &serde_json::Value,
     approved_evidence: &[EvidenceEntry],
+    bullet_keyword_emphasis: BulletKeywordEmphasis,
     concise: bool,
 ) -> String {
     let parsed_job = serde_json::to_string(parsed_job).unwrap_or_else(|_| "{}".to_string());
@@ -172,6 +196,7 @@ pub fn build_tailoring_prompt(
          Rewrite only experience bullet text and skills strings.\n\
          Do not change meta, company names, locations, titles, dates, job order, number of jobs, number of bullets, or skill keys.\n\
          Aggressively incorporate ATS keywords, tools, responsibility phrases, and domain wording when the base resume supports them.\n\
+         {bullet_emphasis_instruction}\
          User-attested evidence may support a skills string. Use it in an experience bullet only when its proof_note explicitly names a matching role or project; never infer a responsibility from a term alone.\n\
          Do not invent credentials, employers, tools, metrics, responsibilities, education, certifications, or experience.\n\
          Put important job keywords without base-resume or user-attested evidence into omitted_unsupported_keywords instead of adding them to the resume.\n\
@@ -180,7 +205,8 @@ pub fn build_tailoring_prompt(
          Normalized job JSON:\n{parsed_job}\n\n\
          ATS analysis JSON:\n{analysis}\n\n\
          Base resume JSON:\n{base_resume}\n\n\
-         User-attested evidence bank entries:\n{approved_evidence}"
+         User-attested evidence bank entries:\n{approved_evidence}",
+        bullet_emphasis_instruction = bullet_keyword_emphasis.prompt_instruction(),
     )
 }
 
@@ -268,6 +294,7 @@ pub fn build_tailoring_request(
     analysis: &JobAnalysis,
     base_resume: &serde_json::Value,
     approved_evidence: &[EvidenceEntry],
+    bullet_keyword_emphasis: BulletKeywordEmphasis,
     concise: bool,
 ) -> serde_json::Value {
     serde_json::json!({
@@ -279,7 +306,7 @@ pub fn build_tailoring_request(
             },
             {
                 "role": "user",
-                "content": build_tailoring_prompt(language, parsed_job, analysis, base_resume, approved_evidence, concise)
+                "content": build_tailoring_prompt(language, parsed_job, analysis, base_resume, approved_evidence, bullet_keyword_emphasis, concise)
             }
         ],
         "text": {
@@ -300,6 +327,7 @@ pub async fn tailor_resume(
     analysis: &JobAnalysis,
     base_resume: &serde_json::Value,
     approved_evidence: &[EvidenceEntry],
+    bullet_keyword_emphasis: BulletKeywordEmphasis,
     concise: bool,
 ) -> Result<TailoredResume, TailoringError> {
     validate_language(language)?;
@@ -311,6 +339,7 @@ pub async fn tailor_resume(
         analysis,
         base_resume,
         approved_evidence,
+        bullet_keyword_emphasis,
         concise,
     );
     let url = format!("{}/responses", config.base_url.trim_end_matches('/'));
@@ -443,6 +472,33 @@ pub fn validate_tailored_content(
     }
 
     Ok(())
+}
+
+fn count_changed_experience_bullets(base: &serde_json::Value, tailored: &serde_json::Value) -> u32 {
+    base["experience"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .zip(
+            tailored["experience"]
+                .as_array()
+                .into_iter()
+                .flatten(),
+        )
+        .flat_map(|(base_job, tailored_job)| {
+            base_job["bullets"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .zip(
+                    tailored_job["bullets"]
+                        .as_array()
+                        .into_iter()
+                        .flatten(),
+                )
+        })
+        .filter(|(base_bullet, tailored_bullet)| base_bullet != tailored_bullet)
+        .count() as u32
 }
 
 fn object_keys(value: &serde_json::Value) -> Result<BTreeSet<String>, TailoringError> {
@@ -748,6 +804,8 @@ fn partial_docx_response(
     docx_path: &Path,
     pdf_path: &Path,
     page_count: Option<u32>,
+    bullet_keyword_emphasis: BulletKeywordEmphasis,
+    experience_bullets_changed: u32,
     report: TailoringReport,
     error: String,
 ) -> Result<TailorResponse, TailoringError> {
@@ -767,6 +825,8 @@ fn partial_docx_response(
         validation_status: "passed",
         fit_status: "failed",
         page_count,
+        bullet_keyword_emphasis,
+        experience_bullets_changed,
         report: Some(report),
         error: Some(error),
     })
@@ -848,6 +908,7 @@ pub async fn tailor_and_render_with_progress(
             &request.analysis,
             &base_resume,
             &request.approved_evidence,
+            request.bullet_keyword_emphasis,
             attempt_index > 0,
         )
         .await
@@ -889,6 +950,7 @@ pub async fn tailor_and_render_with_progress(
             );
             return Err(error);
         }
+        let experience_bullets_changed = count_changed_experience_bullets(&base_resume, &tailored.content);
         progress(
             reporter,
             "safety_validation",
@@ -1054,6 +1116,8 @@ pub async fn tailor_and_render_with_progress(
                     validation_status: "passed",
                     fit_status: "passed",
                     page_count: Some(page_count),
+                    bullet_keyword_emphasis: request.bullet_keyword_emphasis,
+                    experience_bullets_changed,
                     report: Some(tailored.report),
                     error: None,
                 });
@@ -1092,6 +1156,8 @@ pub async fn tailor_and_render_with_progress(
                         &docx_path,
                         &pdf_path,
                         page_counts.last().copied(),
+                        request.bullet_keyword_emphasis,
+                        experience_bullets_changed,
                         tailored.report,
                         error.to_string(),
                     )?;
@@ -1122,6 +1188,8 @@ pub async fn tailor_and_render_with_progress(
                     &docx_path,
                     &pdf_path,
                     None,
+                    request.bullet_keyword_emphasis,
+                    experience_bullets_changed,
                     tailored.report,
                     error.to_string(),
                 )?;
@@ -1155,6 +1223,8 @@ pub fn failed_response(error: String) -> TailorResponse {
         validation_status: "not_run",
         fit_status: "not_run",
         page_count: None,
+        bullet_keyword_emphasis: BulletKeywordEmphasis::Balanced,
+        experience_bullets_changed: 0,
         report: None,
         error: Some(error),
     }

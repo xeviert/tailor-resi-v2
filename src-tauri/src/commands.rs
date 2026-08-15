@@ -3,7 +3,7 @@ use crate::{
     evidence::{load_evidence_bank, preflight_items, remove_evidence, save_selected_evidence, selected_for_prompt, EvidenceBank, PreflightItem, SelectedEvidence},
     error::AppError,
     server::{load_latest_capture, CapturedJob},
-    tailoring::{load_base_resume, tailor_and_render_with_progress, workspace_root, PipelineProgress, TailorRequest, TailorResponse},
+    tailoring::{load_base_resume, tailor_and_render_with_progress, workspace_root, BulletKeywordEmphasis, PipelineProgress, TailorRequest, TailorResponse},
 };
 use serde::{Deserialize, Serialize};
 use std::{path::Path, process::Command};
@@ -37,6 +37,8 @@ pub struct GenerateTailoredResumeRequest {
     pub analysis: JobAnalysis,
     #[serde(default)]
     pub selected_evidence: Vec<SelectedEvidence>,
+    #[serde(default)]
+    pub bullet_keyword_emphasis: BulletKeywordEmphasis,
 }
 
 #[tauri::command]
@@ -102,6 +104,7 @@ pub async fn run_resume_pipeline(
             parsed: captured.parsed,
             analysis: analysis.clone(),
             approved_evidence: vec![],
+            bullet_keyword_emphasis: BulletKeywordEmphasis::Balanced,
         },
         Some(&reporter),
     )
@@ -153,6 +156,7 @@ pub async fn generate_tailored_resume(
         parsed: captured.parsed,
         analysis: request.analysis,
         approved_evidence: selected_for_prompt(&request.selected_evidence),
+        bullet_keyword_emphasis: request.bullet_keyword_emphasis,
     }, Some(&reporter)).await.map_err(|error| AppError::Message(error.to_string()))
 }
 
