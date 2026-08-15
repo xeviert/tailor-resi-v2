@@ -83,6 +83,13 @@ pub struct TailoredResume {
     pub report: TailoringReport,
 }
 
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct ContentChange {
+    pub path: String,
+    pub before: String,
+    pub after: String,
+}
+
 #[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum BulletKeywordEmphasis {
@@ -132,6 +139,8 @@ pub struct TailorResponse {
     pub bullet_keyword_emphasis: BulletKeywordEmphasis,
     pub experience_bullets_changed: u32,
     pub report: Option<TailoringReport>,
+    pub tailored_content: Option<serde_json::Value>,
+    pub content_changes: Vec<ContentChange>,
     pub error: Option<String>,
 }
 
@@ -182,7 +191,8 @@ pub fn build_tailoring_prompt(
     let parsed_job = serde_json::to_string(parsed_job).unwrap_or_else(|_| "{}".to_string());
     let analysis = serde_json::to_string(analysis).unwrap_or_else(|_| "{}".to_string());
     let base_resume = serde_json::to_string(base_resume).unwrap_or_else(|_| "{}".to_string());
-    let approved_evidence = serde_json::to_string(approved_evidence).unwrap_or_else(|_| "[]".to_string());
+    let approved_evidence =
+        serde_json::to_string(approved_evidence).unwrap_or_else(|_| "[]".to_string());
 
     let concise_instruction = if concise {
         "The preceding attempt overflowed to a second page. Keep every bullet and every factual claim, but rewrite the editable text more compactly: remove repetition, use concise verbs, and prefer compact ATS terminology. Do not shorten by deleting responsibilities or achievements.\n\n"
@@ -479,26 +489,69 @@ fn count_changed_experience_bullets(base: &serde_json::Value, tailored: &serde_j
         .as_array()
         .into_iter()
         .flatten()
-        .zip(
-            tailored["experience"]
-                .as_array()
-                .into_iter()
-                .flatten(),
-        )
+        .zip(tailored["experience"].as_array().into_iter().flatten())
         .flat_map(|(base_job, tailored_job)| {
             base_job["bullets"]
                 .as_array()
                 .into_iter()
                 .flatten()
-                .zip(
-                    tailored_job["bullets"]
-                        .as_array()
-                        .into_iter()
-                        .flatten(),
-                )
+                .zip(tailored_job["bullets"].as_array().into_iter().flatten())
         })
         .filter(|(base_bullet, tailored_bullet)| base_bullet != tailored_bullet)
         .count() as u32
+}
+
+fn content_changes(base: &serde_json::Value, tailored: &serde_json::Value) -> Vec<ContentChange> {
+    let mut changes = Vec::new();
+    let base_experience = base["experience"]
+        .as_array()
+        .expect("validated base experience");
+    let tailored_experience = tailored["experience"]
+        .as_array()
+        .expect("validated tailored experience");
+
+    for (job_index, (base_job, tailored_job)) in
+        base_experience.iter().zip(tailored_experience).enumerate()
+    {
+        let base_bullets = base_job["bullets"]
+            .as_array()
+            .expect("validated base bullets");
+        let tailored_bullets = tailored_job["bullets"]
+            .as_array()
+            .expect("validated tailored bullets");
+        for (bullet_index, (before, after)) in base_bullets.iter().zip(tailored_bullets).enumerate()
+        {
+            if before != after {
+                changes.push(ContentChange {
+                    path: format!("/experience/{job_index}/bullets/{bullet_index}"),
+                    before: before.as_str().expect("validated base bullet").to_string(),
+                    after: after
+                        .as_str()
+                        .expect("validated tailored bullet")
+                        .to_string(),
+                });
+            }
+        }
+    }
+
+    let base_skills = base["skills"].as_object().expect("validated base skills");
+    let tailored_skills = tailored["skills"]
+        .as_object()
+        .expect("validated tailored skills");
+    for (key, before) in base_skills {
+        let after = &tailored_skills[key];
+        if before != after {
+            changes.push(ContentChange {
+                path: format!("/skills/{key}"),
+                before: before.as_str().expect("validated base skill").to_string(),
+                after: after
+                    .as_str()
+                    .expect("validated tailored skill")
+                    .to_string(),
+            });
+        }
+    }
+    changes
 }
 
 fn object_keys(value: &serde_json::Value) -> Result<BTreeSet<String>, TailoringError> {
@@ -780,7 +833,11 @@ fn downloads_pdf_path(language: &str) -> Result<PathBuf, TailoringError> {
     validate_language(language)?;
     let home = std::env::var_os("USERPROFILE")
         .or_else(|| std::env::var_os("HOME"))
-        .ok_or_else(|| TailoringError::Io("Could not determine the user home directory for Downloads.".to_string()))?;
+        .ok_or_else(|| {
+            TailoringError::Io(
+                "Could not determine the user home directory for Downloads.".to_string(),
+            )
+        })?;
     Ok(PathBuf::from(home)
         .join("Downloads")
         .join(format!("Xevier_T_CV_{language}.pdf")))
@@ -806,6 +863,8 @@ fn partial_docx_response(
     page_count: Option<u32>,
     bullet_keyword_emphasis: BulletKeywordEmphasis,
     experience_bullets_changed: u32,
+    tailored_content: serde_json::Value,
+    content_changes: Vec<ContentChange>,
     report: TailoringReport,
     error: String,
 ) -> Result<TailorResponse, TailoringError> {
@@ -828,6 +887,8 @@ fn partial_docx_response(
         bullet_keyword_emphasis,
         experience_bullets_changed,
         report: Some(report),
+        tailored_content: Some(tailored_content),
+        content_changes,
         error: Some(error),
     })
 }
@@ -950,7 +1011,9 @@ pub async fn tailor_and_render_with_progress(
             );
             return Err(error);
         }
-        let experience_bullets_changed = count_changed_experience_bullets(&base_resume, &tailored.content);
+        let experience_bullets_changed =
+            count_changed_experience_bullets(&base_resume, &tailored.content);
+        let changes = content_changes(&base_resume, &tailored.content);
         progress(
             reporter,
             "safety_validation",
@@ -1087,13 +1150,14 @@ pub async fn tailor_and_render_with_progress(
                     "PDF exported and confirmed at one page.",
                     Some(attempt),
                 );
-                let (downloads_pdf_path, downloads_error) = match publish_downloads_pdf(&latest_pdf_path, language) {
-                    Ok(path) => (Some(path.to_string_lossy().to_string()), None),
-                    Err(error) => {
-                        eprintln!("[downloads] Failed to publish PDF: {error}");
-                        (None, Some(error.to_string()))
-                    }
-                };
+                let (downloads_pdf_path, downloads_error) =
+                    match publish_downloads_pdf(&latest_pdf_path, language) {
+                        Ok(path) => (Some(path.to_string_lossy().to_string()), None),
+                        Err(error) => {
+                            eprintln!("[downloads] Failed to publish PDF: {error}");
+                            (None, Some(error.to_string()))
+                        }
+                    };
                 progress(
                     reporter,
                     "complete",
@@ -1119,6 +1183,8 @@ pub async fn tailor_and_render_with_progress(
                     bullet_keyword_emphasis: request.bullet_keyword_emphasis,
                     experience_bullets_changed,
                     report: Some(tailored.report),
+                    tailored_content: Some(tailored.content),
+                    content_changes: changes,
                     error: None,
                 });
             }
@@ -1158,6 +1224,8 @@ pub async fn tailor_and_render_with_progress(
                         page_counts.last().copied(),
                         request.bullet_keyword_emphasis,
                         experience_bullets_changed,
+                        tailored.content,
+                        changes,
                         tailored.report,
                         error.to_string(),
                     )?;
@@ -1190,6 +1258,8 @@ pub async fn tailor_and_render_with_progress(
                     None,
                     request.bullet_keyword_emphasis,
                     experience_bullets_changed,
+                    tailored.content,
+                    changes,
                     tailored.report,
                     error.to_string(),
                 )?;
@@ -1226,6 +1296,8 @@ pub fn failed_response(error: String) -> TailorResponse {
         bullet_keyword_emphasis: BulletKeywordEmphasis::Balanced,
         experience_bullets_changed: 0,
         report: None,
+        tailored_content: None,
+        content_changes: vec![],
         error: Some(error),
     }
 }
@@ -1240,10 +1312,10 @@ fn relative_path(root: &Path, path: &Path) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        build_tailoring_prompt, civil_date_from_days, company_role_slug,
+        build_tailoring_prompt, civil_date_from_days, company_role_slug, content_changes,
         parse_tailored_resume_from_response, partial_docx_response, slugify,
-        validate_tailored_content, write_variant_files, BulletKeywordEmphasis, TailorRequest, TailoredResume, TailoringReport,
-        MAX_COMPANY_ROLE_SLUG_LEN,
+        validate_tailored_content, write_variant_files, BulletKeywordEmphasis, TailorRequest,
+        TailoredResume, TailoringReport, MAX_COMPANY_ROLE_SLUG_LEN,
     };
     use crate::analysis::{JobAnalysis, KeywordSignal};
     use serde_json::json;
@@ -1317,14 +1389,30 @@ mod tests {
 
     #[test]
     fn concise_retry_prompt_preserves_content_constraints() {
-        let prompt = build_tailoring_prompt("en", &json!({}), &analysis(), &base_resume(), &[], BulletKeywordEmphasis::Balanced, true);
+        let prompt = build_tailoring_prompt(
+            "en",
+            &json!({}),
+            &analysis(),
+            &base_resume(),
+            &[],
+            BulletKeywordEmphasis::Balanced,
+            true,
+        );
         assert!(prompt.contains("overflowed to a second page"));
         assert!(prompt.contains("Do not shorten by deleting responsibilities"));
     }
 
     #[test]
     fn high_bullet_emphasis_prioritizes_breadth() {
-        let prompt = build_tailoring_prompt("en", &json!({}), &analysis(), &base_resume(), &[], BulletKeywordEmphasis::High, false);
+        let prompt = build_tailoring_prompt(
+            "en",
+            &json!({}),
+            &analysis(),
+            &base_resume(),
+            &[],
+            BulletKeywordEmphasis::High,
+            false,
+        );
         assert!(prompt.contains("every factually relevant experience bullet"));
         assert!(prompt.contains("Prioritize breadth across bullets"));
     }
@@ -1335,8 +1423,12 @@ mod tests {
             "language": "en",
             "parsed": {},
             "analysis": analysis()
-        })).unwrap();
-        assert_eq!(request.bullet_keyword_emphasis, BulletKeywordEmphasis::Balanced);
+        }))
+        .unwrap();
+        assert_eq!(
+            request.bullet_keyword_emphasis,
+            BulletKeywordEmphasis::Balanced
+        );
     }
 
     #[test]
@@ -1395,6 +1487,23 @@ mod tests {
 
         let err = validate_tailored_content("en", &base, &tailored).unwrap_err();
         assert!(err.to_string().contains("bullets count changed"));
+    }
+
+    #[test]
+    fn content_change_list_only_includes_editable_changed_values() {
+        let base = base_resume();
+        let mut tailored = base.clone();
+        tailored["experience"][0]["bullets"][0] = json!("Built reliable Rust APIs.");
+        tailored["skills"]["architecture_backend"] =
+            json!("Architecture & Backend: Rust, API Design");
+
+        let changes = content_changes(&base, &tailored);
+
+        assert_eq!(changes.len(), 2);
+        assert_eq!(changes[0].path, "/experience/0/bullets/0");
+        assert_eq!(changes[0].before, "Built APIs.");
+        assert_eq!(changes[0].after, "Built reliable Rust APIs.");
+        assert_eq!(changes[1].path, "/skills/architecture_backend");
     }
 
     #[test]
@@ -1495,6 +1604,8 @@ mod tests {
             None,
             BulletKeywordEmphasis::Balanced,
             0,
+            base_resume(),
+            vec![],
             TailoringReport {
                 covered_keywords: vec![],
                 omitted_unsupported_keywords: vec![],
@@ -1509,6 +1620,7 @@ mod tests {
         assert_eq!(response.tailoring_status, "partial");
         assert_eq!(response.validation_status, "passed");
         assert_eq!(response.fit_status, "failed");
+        assert!(response.tailored_content.is_some());
         assert_eq!(
             response.latest_docx_path.as_deref(),
             Some("resume/generated/Xevier_T_CV_en.docx")
