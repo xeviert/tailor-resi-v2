@@ -1083,7 +1083,7 @@ fn publish_downloads_file(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn partial_docx_response(
+fn partial_tailoring_response(
     root: &Path,
     language: &str,
     variant_slug: String,
@@ -1097,27 +1097,37 @@ fn partial_docx_response(
     tailored_content: serde_json::Value,
     content_changes: Vec<ContentChange>,
     report: TailoringReport,
+    validation_status: &'static str,
+    fit_status: &'static str,
+    publish_docx: bool,
     error: String,
-) -> Result<TailorResponse, TailoringError> {
-    let latest_docx_path = publish_latest_docx(root, language, docx_path)?;
-    Ok(TailorResponse {
+) -> TailorResponse {
+    let (latest_docx_path, downloads_docx_error) = if publish_docx {
+        match publish_latest_docx(root, language, docx_path) {
+            Ok(latest_path) => (Some(relative_path(root, &latest_path)), None),
+            Err(publish_error) => (None, Some(publish_error.to_string())),
+        }
+    } else {
+        (None, None)
+    };
+    TailorResponse {
         success: false,
         tailoring_status: "partial",
         variant_slug: Some(variant_slug),
         variant_json_path: Some(relative_path(root, variant_json_path)),
-        docx_path: Some(relative_path(root, docx_path)),
-        latest_docx_path: Some(relative_path(root, &latest_docx_path)),
+        docx_path: docx_path.exists().then(|| relative_path(root, docx_path)),
+        latest_docx_path,
         pdf_path: pdf_path.exists().then(|| relative_path(root, pdf_path)),
         latest_pdf_path: None,
         downloads_docx_path: None,
-        downloads_docx_error: None,
+        downloads_docx_error,
         downloads_pdf_path: None,
         downloads_error: None,
         docx_opened: false,
         docx_open_error: None,
         report_json_path: Some(relative_path(root, report_json_path)),
-        validation_status: "passed",
-        fit_status: "failed",
+        validation_status,
+        fit_status,
         page_count,
         bullet_keyword_emphasis,
         experience_bullets_changed,
@@ -1125,20 +1135,20 @@ fn partial_docx_response(
         tailored_content: Some(tailored_content),
         content_changes,
         error: Some(error),
-    })
+    }
 }
 
 fn publish_partial_docx_to_downloads(
     response: &mut TailorResponse,
-    latest_docx_path: &Path,
+    root: &Path,
     language: &str,
 ) {
-    match publish_downloads_file(latest_docx_path, language, "docx") {
+    let Some(relative_latest_path) = response.latest_docx_path.as_deref() else {
+        return;
+    };
+    match publish_downloads_file(&root.join(relative_latest_path), language, "docx") {
         Ok(path) => response.downloads_docx_path = Some(path.to_string_lossy().to_string()),
-        Err(error) => {
-            eprintln!("[downloads] Failed to publish DOCX: {error}");
-            response.downloads_docx_error = Some(error.to_string());
-        }
+        Err(error) => response.downloads_docx_error = Some(error.to_string()),
     }
 }
 
@@ -1341,6 +1351,7 @@ pub async fn tailor_and_render_with_progress(
             "Variant JSON and tailoring report saved.",
             Some(attempt),
         );
+        let pdf_path = docx_path.with_extension("pdf");
 
         progress(
             reporter,
@@ -1357,7 +1368,25 @@ pub async fn tailor_and_render_with_progress(
                 error.to_string(),
                 Some(attempt),
             );
-            return Err(error);
+            return Ok(partial_tailoring_response(
+                &root,
+                language,
+                variant_slug,
+                &variant_json_path,
+                &report_json_path,
+                &docx_path,
+                &pdf_path,
+                None,
+                request.bullet_keyword_emphasis,
+                experience_bullets_changed,
+                tailored.content,
+                changes,
+                tailored.report,
+                "not_run",
+                "not_run",
+                false,
+                error.to_string(),
+            ));
         }
         progress(
             reporter,
@@ -1382,7 +1411,25 @@ pub async fn tailor_and_render_with_progress(
                 error.to_string(),
                 Some(attempt),
             );
-            return Err(error);
+            return Ok(partial_tailoring_response(
+                &root,
+                language,
+                variant_slug,
+                &variant_json_path,
+                &report_json_path,
+                &docx_path,
+                &pdf_path,
+                None,
+                request.bullet_keyword_emphasis,
+                experience_bullets_changed,
+                tailored.content,
+                changes,
+                tailored.report,
+                "failed",
+                "not_run",
+                false,
+                error.to_string(),
+            ));
         }
         progress(
             reporter,
@@ -1392,7 +1439,6 @@ pub async fn tailor_and_render_with_progress(
             Some(attempt),
         );
 
-        let pdf_path = docx_path.with_extension("pdf");
         progress(
             reporter,
             "pdf_fit",
@@ -1415,7 +1461,25 @@ pub async fn tailor_and_render_with_progress(
                         error.to_string(),
                         Some(attempt),
                     );
-                    return Err(error);
+                    return Ok(partial_tailoring_response(
+                        &root,
+                        language,
+                        variant_slug,
+                        &variant_json_path,
+                        &report_json_path,
+                        &docx_path,
+                        &pdf_path,
+                        Some(page_count),
+                        request.bullet_keyword_emphasis,
+                        experience_bullets_changed,
+                        tailored.content,
+                        changes,
+                        tailored.report,
+                        "passed",
+                        "passed",
+                        true,
+                        error.to_string(),
+                    ));
                 }
                 if let Err(error) = std::fs::copy(&pdf_path, &latest_pdf_path) {
                     let error = TailoringError::Io(error.to_string());
@@ -1426,7 +1490,25 @@ pub async fn tailor_and_render_with_progress(
                         error.to_string(),
                         Some(attempt),
                     );
-                    return Err(error);
+                    return Ok(partial_tailoring_response(
+                        &root,
+                        language,
+                        variant_slug,
+                        &variant_json_path,
+                        &report_json_path,
+                        &docx_path,
+                        &pdf_path,
+                        Some(page_count),
+                        request.bullet_keyword_emphasis,
+                        experience_bullets_changed,
+                        tailored.content,
+                        changes,
+                        tailored.report,
+                        "passed",
+                        "passed",
+                        true,
+                        error.to_string(),
+                    ));
                 }
                 progress(
                     reporter,
@@ -1503,7 +1585,7 @@ pub async fn tailor_and_render_with_progress(
                         error.to_string(),
                         Some(attempt),
                     );
-                    let mut response = partial_docx_response(
+                    let mut response = partial_tailoring_response(
                         &root,
                         language,
                         variant_slug,
@@ -1517,13 +1599,12 @@ pub async fn tailor_and_render_with_progress(
                         tailored.content,
                         changes,
                         tailored.report,
+                        "passed",
+                        "failed",
+                        true,
                         error.to_string(),
-                    )?;
-                    publish_partial_docx_to_downloads(
-                        &mut response,
-                        &publish_latest_docx(&root, language, &docx_path)?,
-                        language,
                     );
+                    publish_partial_docx_to_downloads(&mut response, &root, language);
                     progress(
                         reporter,
                         "complete",
@@ -1542,7 +1623,7 @@ pub async fn tailor_and_render_with_progress(
                     error.to_string(),
                     Some(attempt),
                 );
-                let mut response = partial_docx_response(
+                let mut response = partial_tailoring_response(
                     &root,
                     language,
                     variant_slug,
@@ -1556,13 +1637,12 @@ pub async fn tailor_and_render_with_progress(
                     tailored.content,
                     changes,
                     tailored.report,
+                    "passed",
+                    "failed",
+                    true,
                     error.to_string(),
-                )?;
-                publish_partial_docx_to_downloads(
-                    &mut response,
-                    &publish_latest_docx(&root, language, &docx_path)?,
-                    language,
                 );
+                publish_partial_docx_to_downloads(&mut response, &root, language);
                 progress(
                     reporter,
                     "complete",
@@ -1617,7 +1697,7 @@ fn relative_path(root: &Path, path: &Path) -> String {
 mod tests {
     use super::{
         build_tailoring_prompt, civil_date_from_days, company_role_slug, content_changes,
-        parse_tailored_resume_from_response, partial_docx_response, pdf_page_count, slugify,
+        parse_tailored_resume_from_response, partial_tailoring_response, pdf_page_count, slugify,
         normalize_high_emphasis_bullet_rewrite_decisions, unchanged_experience_bullets,
         validate_high_emphasis_bullet_rewrites, validate_tailored_content, write_variant_files,
         BulletKeywordEmphasis, BulletRewriteDecision, BulletRewriteOutcome, TailorRequest,
@@ -2074,7 +2154,7 @@ mod tests {
         std::fs::write(&report_json_path, b"{}").unwrap();
         std::fs::write(&generated_template_output, b"existing generated output").unwrap();
 
-        let response = partial_docx_response(
+        let response = partial_tailoring_response(
             &root,
             "en",
             "test-en".to_string(),
@@ -2095,9 +2175,11 @@ mod tests {
                 estimated_ats_coverage_score: 80,
                 bullet_rewrite_decisions: vec![],
             },
+            "passed",
+            "failed",
+            true,
             "PDF export failed".to_string(),
-        )
-        .unwrap();
+        );
 
         assert_eq!(response.tailoring_status, "partial");
         assert_eq!(response.validation_status, "passed");
@@ -2117,6 +2199,59 @@ mod tests {
             std::fs::read(generated_template_output).unwrap(),
             b"existing generated output"
         );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn partial_result_keeps_summary_when_no_document_is_available() {
+        let suffix = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("resume-summary-only-result-{suffix}"));
+        let variant_dir = root.join("resume/variants/test-en");
+        std::fs::create_dir_all(&variant_dir).unwrap();
+        let variant_json_path = variant_dir.join("variant.json");
+        let report_json_path = variant_dir.join("tailoring-report.json");
+        let docx_path = variant_dir.join("Xevier_T_CV_en.docx");
+        let pdf_path = variant_dir.join("Xevier_T_CV_en.pdf");
+        std::fs::write(&variant_json_path, b"{}").unwrap();
+        std::fs::write(&report_json_path, b"{}").unwrap();
+
+        let response = partial_tailoring_response(
+            &root,
+            "en",
+            "test-en".to_string(),
+            &variant_json_path,
+            &report_json_path,
+            &docx_path,
+            &pdf_path,
+            None,
+            BulletKeywordEmphasis::High,
+            2,
+            base_resume(),
+            vec![],
+            TailoringReport {
+                covered_keywords: vec!["Rust".to_string()],
+                omitted_unsupported_keywords: vec!["Kubernetes".to_string()],
+                changed_fields: vec!["experience.bullets".to_string()],
+                safety_notes: vec![],
+                estimated_ats_coverage_score: 73,
+                bullet_rewrite_decisions: vec![],
+            },
+            "failed",
+            "not_run",
+            false,
+            "Locked-section validation failed".to_string(),
+        );
+
+        assert_eq!(response.tailoring_status, "partial");
+        assert_eq!(response.validation_status, "failed");
+        assert_eq!(response.fit_status, "not_run");
+        assert!(response.latest_docx_path.is_none());
+        assert!(response.latest_pdf_path.is_none());
+        assert!(response.tailored_content.is_some());
+        assert_eq!(response.report.unwrap().estimated_ats_coverage_score, 73);
         std::fs::remove_dir_all(root).unwrap();
     }
 

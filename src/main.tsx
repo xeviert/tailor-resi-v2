@@ -1,6 +1,6 @@
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { JobPanel } from './job-panel';
 import './styles.css';
@@ -373,13 +373,17 @@ function ResultPanel({
   const { resume } = result;
   const partial = resume.tailoring_status === 'partial';
   const report = resume.report;
-  const saveMessage = partial
-    ? resume.downloads_docx_path
-      ? `Validated DOCX copied to Downloads: ${resume.downloads_docx_path}`
-      : `Validated DOCX saved at: ${resume.latest_docx_path}`
-    : resume.downloads_pdf_path
+  const hasPdf = Boolean(resume.latest_pdf_path);
+  const hasDocx = Boolean(resume.latest_docx_path);
+  const saveMessage = hasPdf
+    ? resume.downloads_pdf_path
       ? `Locked sections validated - ${resume.page_count} page - copied to Downloads.`
-      : `Locked sections validated - ${resume.page_count} page - saved as ${resume.latest_pdf_path}`;
+      : `PDF saved at: ${resume.latest_pdf_path ?? resume.pdf_path}`
+    : hasDocx
+      ? resume.downloads_docx_path
+        ? `Validated DOCX copied to Downloads: ${resume.downloads_docx_path}`
+        : `DOCX saved at: ${resume.latest_docx_path ?? resume.docx_path}`
+      : 'The ATS summary is available, but no document artifact was produced.';
   return (
     <section
       className={`mt-7 grid grid-cols-[1fr_auto] gap-[18px] rounded-[14px] border bg-white p-7 shadow-[0_8px_24px_#1f2a2110] max-[680px]:grid-cols-1 ${
@@ -389,9 +393,11 @@ function ResultPanel({
       <div>
         <p className={eyebrowClass}>{partial ? 'DOCX READY' : 'COMPLETE'}</p>
         <h2 className='mb-2 text-[22px] font-bold'>
-          {partial
-            ? 'Validated DOCX saved; PDF not ready'
-            : 'One-page PDF is ready'}
+          {hasPdf
+            ? 'One-page PDF is ready'
+            : hasDocx
+              ? 'Tailoring summary ready; PDF not ready'
+              : 'Tailoring summary ready'}
         </h2>
         <p className='mt-0'>{result.analysis.summary}</p>
         <p className={mutedClass}>{saveMessage}</p>
@@ -402,9 +408,9 @@ function ResultPanel({
             : 'tailored'}{' '}
           - {resume.bullet_keyword_emphasis} emphasis
         </p>
-        {partial && resume.error && (
+        {resume.error && (
           <p className='mt-3.5 mb-0 rounded-lg bg-[#fff6df] px-3 py-2.5 text-[13px] text-[#795b13] [overflow-wrap:anywhere]'>
-            PDF step: {resume.error}
+            Output step: {resume.error}
           </p>
         )}
         {partial && resume.docx_opened && (
@@ -437,24 +443,26 @@ function ResultPanel({
           <span className='text-xs text-[#627067]'>estimated ATS coverage</span>
         </div>
       )}
-      <div className='col-span-full flex items-center gap-2.5 max-[680px]:flex-wrap'>
-        <button
-          className={primaryButtonClass}
-          onClick={() =>
-            action(partial ? 'open_latest_docx' : 'open_latest_pdf')
-          }
-        >
-          {partial ? 'Open DOCX' : 'Open PDF'}
-        </button>
-        <button
-          className={secondaryButtonClass}
-          onClick={() =>
-            action(partial ? 'reveal_latest_docx' : 'reveal_latest_pdf')
-          }
-        >
-          Open folder
-        </button>
-      </div>
+      {(hasPdf || hasDocx) && (
+        <div className='col-span-full flex items-center gap-2.5 max-[680px]:flex-wrap'>
+          <button
+            className={primaryButtonClass}
+            onClick={() =>
+              action(hasPdf ? 'open_latest_pdf' : 'open_latest_docx')
+            }
+          >
+            {hasPdf ? 'Open PDF' : 'Open DOCX'}
+          </button>
+          <button
+            className={secondaryButtonClass}
+            onClick={() =>
+              action(hasPdf ? 'reveal_latest_pdf' : 'reveal_latest_docx')
+            }
+          >
+            Open folder
+          </button>
+        </div>
+      )}
       {report && report.omitted_unsupported_keywords.length > 0 && (
         <p className='col-span-full m-0 text-[#6f5521]'>
           <b>Still not added:</b>{' '}
@@ -466,6 +474,12 @@ function ResultPanel({
           content={resume.tailored_content}
           changes={resume.content_changes}
         />
+      )}
+      {resume.tailored_content === null && (
+        <p className='col-span-full m-0 border-t border-[#e7ebe7] pt-[18px] text-[#6f5521]'>
+          ATS score and JSON changes are unavailable because tailoring did not
+          complete.
+        </p>
       )}
     </section>
   );
@@ -633,6 +647,7 @@ function App() {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [proofs, setProofs] = useState<Record<string, string>>({});
   const [bank, setBank] = useState<EvidenceBank | null>(null);
+  const resultRef = useRef<HTMLDivElement | null>(null);
   const loadBank = () =>
     invoke<EvidenceBank>('get_evidence_bank')
       .then(setBank)
@@ -677,6 +692,11 @@ function App() {
       unlistenProgress?.();
     };
   }, []);
+  useEffect(() => {
+    if (!result) return;
+    resultRef.current?.focus({ preventScroll: true });
+    resultRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }, [result]);
   async function analyze() {
     setRunning(true);
     setError('');
@@ -781,6 +801,11 @@ function App() {
           {capture ? 'Job captured' : 'Waiting for capture'}
         </span>
       </header>
+      {error && (
+        <p className='mt-4 mb-0 rounded-lg bg-[#fff3eb] px-3 py-2.5 text-[#9e411e]' role='alert'>
+          {error}
+        </p>
+      )}
       {!job ? (
         <section className={`${panelClass} max-w-[650px]`}>
           <h2 className='mb-2 text-[22px] font-bold'>
@@ -890,6 +915,21 @@ function App() {
               </button>
             </div>
           </section>
+          {result && (
+            <div ref={resultRef} tabIndex={-1} className='scroll-mt-5 outline-none'>
+              <ResultPanel result={result} action={action} />
+            </div>
+          )}
+          {preflight && !result && (
+            <section className={compactPanelClass} aria-live='polite'>
+              <p className={eyebrowClass}>ATS ANALYSIS SUMMARY</p>
+              <p className='mt-2 mb-0'>{preflight.analysis.summary}</p>
+              <small className='mt-2 block text-xs text-[#627067]'>
+                The ATS score and exact JSON changes will appear here after
+                tailoring, even if document generation does not complete.
+              </small>
+            </section>
+          )}
           {preflight &&
             (preflightCollapsed ? (
               <PreflightSummary
@@ -914,8 +954,16 @@ function App() {
                 }
               />
             ))}
-          {(running || progressEvents.length > 0) && (
+          {(running || (progressEvents.length > 0 && !result)) && (
             <ProgressPanel events={progressEvents} running={running} />
+          )}
+          {result && progressEvents.length > 0 && (
+            <details className={compactPanelClass}>
+              <summary className='cursor-pointer font-bold text-[#176a46]'>
+                View completed pipeline activity
+              </summary>
+              <ProgressPanel events={progressEvents} running={false} />
+            </details>
           )}
         </>
       )}
@@ -952,12 +1000,6 @@ function App() {
           </div>
         </details>
       )}
-      {error && (
-        <p className='mt-4 mb-0 rounded-lg bg-[#fff3eb] px-3 py-2.5 text-[#9e411e]'>
-          {error}
-        </p>
-      )}
-      {result && <ResultPanel result={result} action={action} />}
     </main>
   );
 }

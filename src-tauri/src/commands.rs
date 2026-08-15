@@ -110,7 +110,7 @@ pub async fn run_resume_pipeline(
     )
     .await
     .map_err(|error| AppError::Message(error.to_string()))?;
-    if resume.tailoring_status == "partial" {
+    if resume.tailoring_status == "partial" && resume.latest_docx_path.is_some() {
         match latest_docx(&language).and_then(|path| launch_path(&path, false)) {
             Ok(()) => resume.docx_opened = true,
             Err(error) => {
@@ -163,7 +163,7 @@ pub async fn generate_tailored_resume(
         approved_evidence: selected_for_prompt(&request.selected_evidence),
         bullet_keyword_emphasis: request.bullet_keyword_emphasis,
     }, Some(&reporter)).await.map_err(|error| AppError::Message(error.to_string()))?;
-    if response.tailoring_status == "partial" {
+    if response.tailoring_status == "partial" && response.latest_docx_path.is_some() {
         match latest_docx(&language).and_then(|path| launch_path(&path, false)) {
             Ok(()) => response.docx_opened = true,
             Err(error) => response.docx_open_error = Some(error.to_string()),
