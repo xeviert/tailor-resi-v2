@@ -359,8 +359,11 @@ function ResultPanel({
         <p className='mt-0'>{result.analysis.summary}</p>
         <p className={mutedClass}>{saveMessage}</p>
         <p className='mt-3.5 mb-0 text-[13px] font-bold capitalize text-[#176a46]'>
-          {resume.experience_bullets_changed} experience bullets tailored -{' '}
-          {resume.bullet_keyword_emphasis} emphasis
+          {resume.experience_bullets_changed} experience bullets{' '}
+          {resume.bullet_keyword_emphasis === 'high'
+            ? 'rewritten before skills'
+            : 'tailored'}{' '}
+          - {resume.bullet_keyword_emphasis} emphasis
         </p>
         {partial && resume.error && (
           <p className='mt-3.5 mb-0 rounded-lg bg-[#fff6df] px-3 py-2.5 text-[13px] text-[#795b13] [overflow-wrap:anywhere]'>
