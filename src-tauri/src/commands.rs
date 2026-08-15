@@ -98,7 +98,7 @@ pub async fn run_resume_pipeline(
         attempt: None,
         total_attempts: None,
     });
-    let resume = tailor_and_render_with_progress(
+    let mut resume = tailor_and_render_with_progress(
         TailorRequest {
             language: language.clone(),
             parsed: captured.parsed,
@@ -111,8 +111,12 @@ pub async fn run_resume_pipeline(
     .await
     .map_err(|error| AppError::Message(error.to_string()))?;
     if resume.tailoring_status == "partial" {
-        if let Err(error) = launch_path(&latest_docx(&language)?, false) {
-            eprintln!("[pipeline] Failed to open validated DOCX: {error}");
+        match latest_docx(&language).and_then(|path| launch_path(&path, false)) {
+            Ok(()) => resume.docx_opened = true,
+            Err(error) => {
+                eprintln!("[pipeline] Failed to open validated DOCX: {error}");
+                resume.docx_open_error = Some(error.to_string());
+            }
         }
     }
     Ok(PipelineResult { analysis, resume })
@@ -151,13 +155,21 @@ pub async fn generate_tailored_resume(
             eprintln!("[pipeline] Failed to emit progress event: {error}");
         }
     };
-    tailor_and_render_with_progress(TailorRequest {
-        language: request.language,
+    let language = request.language.clone();
+    let mut response = tailor_and_render_with_progress(TailorRequest {
+        language: language.clone(),
         parsed: captured.parsed,
         analysis: request.analysis,
         approved_evidence: selected_for_prompt(&request.selected_evidence),
         bullet_keyword_emphasis: request.bullet_keyword_emphasis,
-    }, Some(&reporter)).await.map_err(|error| AppError::Message(error.to_string()))
+    }, Some(&reporter)).await.map_err(|error| AppError::Message(error.to_string()))?;
+    if response.tailoring_status == "partial" {
+        match latest_docx(&language).and_then(|path| launch_path(&path, false)) {
+            Ok(()) => response.docx_opened = true,
+            Err(error) => response.docx_open_error = Some(error.to_string()),
+        }
+    }
+    Ok(response)
 }
 
 #[tauri::command]

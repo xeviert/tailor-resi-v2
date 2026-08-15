@@ -75,6 +75,22 @@ pub struct TailoringReport {
     pub changed_fields: Vec<String>,
     pub safety_notes: Vec<String>,
     pub estimated_ats_coverage_score: u8,
+    pub bullet_rewrite_decisions: Vec<BulletRewriteDecision>,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+pub struct BulletRewriteDecision {
+    pub experience_index: usize,
+    pub bullet_index: usize,
+    pub outcome: BulletRewriteOutcome,
+    pub rationale: String,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BulletRewriteOutcome {
+    Rewritten,
+    NoRelevantMatch,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
@@ -130,8 +146,12 @@ pub struct TailorResponse {
     pub latest_docx_path: Option<String>,
     pub pdf_path: Option<String>,
     pub latest_pdf_path: Option<String>,
+    pub downloads_docx_path: Option<String>,
+    pub downloads_docx_error: Option<String>,
     pub downloads_pdf_path: Option<String>,
     pub downloads_error: Option<String>,
+    pub docx_opened: bool,
+    pub docx_open_error: Option<String>,
     pub report_json_path: Option<String>,
     pub validation_status: &'static str,
     pub fit_status: &'static str,
@@ -789,28 +809,33 @@ fn check_one_page_fit(
     let output = powershell_command()
         .args(["-File"])
         .arg(script)
-        .arg("fit")
+        .arg("pdf")
         .arg("-Docx")
         .arg(docx_path)
         .arg("-Out")
-        .arg(pdf_path)
+        .arg(pdf_path.parent().ok_or_else(|| {
+            TailoringError::Fit("PDF output path must have a parent directory.".to_string())
+        })?)
         .output()
         .map_err(|error| TailoringError::Fit(error.to_string()))?;
-    let text = String::from_utf8_lossy(&output.stdout);
-    let result = text
-        .lines()
-        .find_map(|line| serde_json::from_str::<serde_json::Value>(line).ok());
-    let page_count = result
-        .and_then(|value| value["page_count"].as_u64())
-        .map(|count| count as u32);
-    match (output.status.success(), page_count) {
-        (true, Some(1)) => Ok(1),
-        (false, Some(count)) => Err(TailoringError::OnePageFit {
+    if !output.status.success() {
+        return Err(TailoringError::Fit(command_output(&output)));
+    }
+
+    let page_count = pdf_page_count(pdf_path)?;
+    match page_count {
+        1 => Ok(1),
+        count => Err(TailoringError::OnePageFit {
             attempts: 1,
             page_counts: vec![count],
         }),
-        _ => Err(TailoringError::Fit(command_output(&output))),
     }
+}
+
+fn pdf_page_count(pdf_path: &Path) -> Result<u32, TailoringError> {
+    let document = lopdf::Document::load(pdf_path)
+        .map_err(|error| TailoringError::Fit(format!("Could not read exported PDF: {error}")))?;
+    Ok(document.get_pages().len() as u32)
 }
 
 fn publish_latest_docx(
@@ -829,7 +854,7 @@ fn publish_latest_docx(
     Ok(latest_docx_path)
 }
 
-fn downloads_pdf_path(language: &str) -> Result<PathBuf, TailoringError> {
+fn downloads_file_path(language: &str, extension: &str) -> Result<PathBuf, TailoringError> {
     validate_language(language)?;
     let home = std::env::var_os("USERPROFILE")
         .or_else(|| std::env::var_os("HOME"))
@@ -840,14 +865,18 @@ fn downloads_pdf_path(language: &str) -> Result<PathBuf, TailoringError> {
         })?;
     Ok(PathBuf::from(home)
         .join("Downloads")
-        .join(format!("Xevier_T_CV_{language}.pdf")))
+        .join(format!("Xevier_T_CV_{language}.{extension}")))
 }
 
-fn publish_downloads_pdf(pdf_path: &Path, language: &str) -> Result<PathBuf, TailoringError> {
-    let destination = downloads_pdf_path(language)?;
+fn publish_downloads_file(
+    source_path: &Path,
+    language: &str,
+    extension: &str,
+) -> Result<PathBuf, TailoringError> {
+    let destination = downloads_file_path(language, extension)?;
     std::fs::create_dir_all(destination.parent().expect("Downloads path has a parent"))
         .map_err(|error| TailoringError::Io(error.to_string()))?;
-    std::fs::copy(pdf_path, &destination).map_err(|error| TailoringError::Io(error.to_string()))?;
+    std::fs::copy(source_path, &destination).map_err(|error| TailoringError::Io(error.to_string()))?;
     Ok(destination)
 }
 
@@ -878,8 +907,12 @@ fn partial_docx_response(
         latest_docx_path: Some(relative_path(root, &latest_docx_path)),
         pdf_path: pdf_path.exists().then(|| relative_path(root, pdf_path)),
         latest_pdf_path: None,
+        downloads_docx_path: None,
+        downloads_docx_error: None,
         downloads_pdf_path: None,
         downloads_error: None,
+        docx_opened: false,
+        docx_open_error: None,
         report_json_path: Some(relative_path(root, report_json_path)),
         validation_status: "passed",
         fit_status: "failed",
@@ -891,6 +924,20 @@ fn partial_docx_response(
         content_changes,
         error: Some(error),
     })
+}
+
+fn publish_partial_docx_to_downloads(
+    response: &mut TailorResponse,
+    latest_docx_path: &Path,
+    language: &str,
+) {
+    match publish_downloads_file(latest_docx_path, language, "docx") {
+        Ok(path) => response.downloads_docx_path = Some(path.to_string_lossy().to_string()),
+        Err(error) => {
+            eprintln!("[downloads] Failed to publish DOCX: {error}");
+            response.downloads_docx_error = Some(error.to_string());
+        }
+    }
 }
 
 fn powershell_command() -> Command {
@@ -1151,7 +1198,7 @@ pub async fn tailor_and_render_with_progress(
                     Some(attempt),
                 );
                 let (downloads_pdf_path, downloads_error) =
-                    match publish_downloads_pdf(&latest_pdf_path, language) {
+                    match publish_downloads_file(&latest_pdf_path, language, "pdf") {
                         Ok(path) => (Some(path.to_string_lossy().to_string()), None),
                         Err(error) => {
                             eprintln!("[downloads] Failed to publish PDF: {error}");
@@ -1174,8 +1221,12 @@ pub async fn tailor_and_render_with_progress(
                     latest_docx_path: None,
                     pdf_path: Some(relative_path(&root, &pdf_path)),
                     latest_pdf_path: Some(relative_path(&root, &latest_pdf_path)),
+                    downloads_docx_path: None,
+                    downloads_docx_error: None,
                     downloads_pdf_path,
                     downloads_error,
+                    docx_opened: false,
+                    docx_open_error: None,
                     report_json_path: Some(relative_path(&root, &report_json_path)),
                     validation_status: "passed",
                     fit_status: "passed",
@@ -1213,7 +1264,7 @@ pub async fn tailor_and_render_with_progress(
                         error.to_string(),
                         Some(attempt),
                     );
-                    let response = partial_docx_response(
+                    let mut response = partial_docx_response(
                         &root,
                         language,
                         variant_slug,
@@ -1229,6 +1280,11 @@ pub async fn tailor_and_render_with_progress(
                         tailored.report,
                         error.to_string(),
                     )?;
+                    publish_partial_docx_to_downloads(
+                        &mut response,
+                        &publish_latest_docx(&root, language, &docx_path)?,
+                        language,
+                    );
                     progress(
                         reporter,
                         "complete",
@@ -1247,7 +1303,7 @@ pub async fn tailor_and_render_with_progress(
                     error.to_string(),
                     Some(attempt),
                 );
-                let response = partial_docx_response(
+                let mut response = partial_docx_response(
                     &root,
                     language,
                     variant_slug,
@@ -1263,6 +1319,11 @@ pub async fn tailor_and_render_with_progress(
                     tailored.report,
                     error.to_string(),
                 )?;
+                publish_partial_docx_to_downloads(
+                    &mut response,
+                    &publish_latest_docx(&root, language, &docx_path)?,
+                    language,
+                );
                 progress(
                     reporter,
                     "complete",
@@ -1287,8 +1348,12 @@ pub fn failed_response(error: String) -> TailorResponse {
         latest_docx_path: None,
         pdf_path: None,
         latest_pdf_path: None,
+        downloads_docx_path: None,
+        downloads_docx_error: None,
         downloads_pdf_path: None,
         downloads_error: None,
+        docx_opened: false,
+        docx_open_error: None,
         report_json_path: None,
         validation_status: "not_run",
         fit_status: "not_run",
@@ -1313,11 +1378,12 @@ fn relative_path(root: &Path, path: &Path) -> String {
 mod tests {
     use super::{
         build_tailoring_prompt, civil_date_from_days, company_role_slug, content_changes,
-        parse_tailored_resume_from_response, partial_docx_response, slugify,
+        parse_tailored_resume_from_response, partial_docx_response, pdf_page_count, slugify,
         validate_tailored_content, write_variant_files, BulletKeywordEmphasis, TailorRequest,
         TailoredResume, TailoringReport, MAX_COMPANY_ROLE_SLUG_LEN,
     };
     use crate::analysis::{JobAnalysis, KeywordSignal};
+    use lopdf::{dictionary, Document, Object};
     use serde_json::json;
 
     fn analysis() -> JobAnalysis {
@@ -1621,6 +1687,8 @@ mod tests {
         assert_eq!(response.validation_status, "passed");
         assert_eq!(response.fit_status, "failed");
         assert!(response.tailored_content.is_some());
+        assert_eq!(response.report.unwrap().estimated_ats_coverage_score, 80);
+        assert!(response.content_changes.is_empty());
         assert_eq!(
             response.latest_docx_path.as_deref(),
             Some("resume/generated/Xevier_T_CV_en.docx")
@@ -1634,5 +1702,46 @@ mod tests {
             b"existing generated output"
         );
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn counts_pages_from_pdf_structure_instead_of_raw_text() {
+        let suffix = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!("resume-page-count-{suffix}.pdf"));
+        let mut document = Document::with_version("1.5");
+        let pages_id = document.new_object_id();
+        let page_id = document.new_object_id();
+        let catalog_id = document.new_object_id();
+        document.objects.insert(
+            page_id,
+            Object::Dictionary(dictionary! {
+                "Type" => "Page",
+                "Parent" => Object::Reference(pages_id),
+                "MediaBox" => vec![0.into(), 0.into(), 612.into(), 792.into()],
+            }),
+        );
+        document.objects.insert(
+            pages_id,
+            Object::Dictionary(dictionary! {
+                "Type" => "Pages",
+                "Kids" => vec![Object::Reference(page_id)],
+                "Count" => 1,
+            }),
+        );
+        document.objects.insert(
+            catalog_id,
+            Object::Dictionary(dictionary! {
+                "Type" => "Catalog",
+                "Pages" => Object::Reference(pages_id),
+            }),
+        );
+        document.trailer.set("Root", Object::Reference(catalog_id));
+        document.save(&path).unwrap();
+
+        assert_eq!(pdf_page_count(&path).unwrap(), 1);
+        std::fs::remove_file(path).unwrap();
     }
 }

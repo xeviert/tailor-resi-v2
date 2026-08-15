@@ -255,6 +255,346 @@
       "term": "MCP-compatible tools",
       "kind": "method_domain",
       "user_attested": true
+    },
+    {
+      "term": "Ability to bridge the gap between technical constraints and business/compliance requirements",
+      "kind": "technology",
+      "user_attested": true
+    },
+    {
+      "term": "Ability to prioritize added-value tasks in a high-stakes environment",
+      "kind": "technology",
+      "user_attested": true
+    },
+    {
+      "term": "Confirmed experience in a management position",
+      "kind": "technology",
+      "user_attested": true
+    },
+    {
+      "term": "Engineering Leadership",
+      "kind": "technology",
+      "user_attested": true
+    },
+    {
+      "term": "Engineering Manager",
+      "kind": "technology",
+      "user_attested": true
+    },
+    {
+      "term": "Experience in building reliable, scalable, and secure consumer-facing products",
+      "kind": "technology",
+      "user_attested": true
+    },
+    {
+      "term": "Experience managing development processes using agile methodologies such as Scrum or Kanban",
+      "kind": "technology",
+      "user_attested": true
+    },
+    {
+      "term": "Proven people management skills",
+      "kind": "technology",
+      "user_attested": true
+    },
+    {
+      "term": "Strong leadership and communication skills in English",
+      "kind": "technology",
+      "user_attested": true
+    },
+    {
+      "term": "Track record of getting things done",
+      "kind": "technology",
+      "user_attested": true
+    },
+    {
+      "term": "complex, cross-team projects",
+      "kind": "technology",
+      "user_attested": true
+    },
+    {
+      "term": "frontend and backend engineers",
+      "kind": "technology",
+      "user_attested": true
+    },
+    {
+      "term": "people management",
+      "kind": "technology",
+      "user_attested": true
+    },
+    {
+      "term": "reliable, scalable, and secure consumer-facing products",
+      "kind": "technology",
+      "user_attested": true
+    },
+    {
+      "term": "scalable and reliable platform",
+      "kind": "technology",
+      "user_attested": true
+    },
+    {
+      "term": "Act as the main engineering advisor to the Product Manager and business stakeholders",
+      "kind": "responsibility",
+      "user_attested": true
+    },
+    {
+      "term": "Agile methodologies",
+      "kind": "method_domain",
+      "user_attested": true
+    },
+    {
+      "term": "Ensure performance, stability, and long-term scalability",
+      "kind": "responsibility",
+      "user_attested": true
+    },
+    {
+      "term": "Ensure the team leverages modern tools to maintain high productivity and quality",
+      "kind": "responsibility",
+      "user_attested": true
+    },
+    {
+      "term": "Facilitate the planning and delivery of complex, cross-team projects",
+      "kind": "responsibility",
+      "user_attested": true
+    },
+    {
+      "term": "Foster a culture of innovation and continuous improvement",
+      "kind": "responsibility",
+      "user_attested": true
+    },
+    {
+      "term": "Kanban",
+      "kind": "technology",
+      "user_attested": true
+    },
+    {
+      "term": "Operational Excellence",
+      "kind": "technology",
+      "user_attested": true
+    },
+    {
+      "term": "Participate in the definition of the squad’s objectives and long-term technical roadmap",
+      "kind": "responsibility",
+      "user_attested": true
+    },
+    {
+      "term": "Prioritize deliveries according to business objectives",
+      "kind": "responsibility",
+      "user_attested": true
+    },
+    {
+      "term": "Report on the squad’s progress",
+      "kind": "responsibility",
+      "user_attested": true
+    },
+    {
+      "term": "Stakeholder Management",
+      "kind": "technology",
+      "user_attested": true
+    },
+    {
+      "term": "getting things done",
+      "kind": "technology",
+      "user_attested": true
+    },
+    {
+      "term": "leadership and communication skills in English",
+      "kind": "technology",
+      "user_attested": true
+    },
+    {
+      "term": "long-term technical roadmap",
+      "kind": "technology",
+      "user_attested": true
+    },
+    {
+      "term": "AI-driven acceleration",
+      "kind": "technology",
+      "user_attested": true
+    },
+    {
+      "term": "5+ years of professional software engineering experience",
+      "kind": "technology",
+      "user_attested": true
+    },
+    {
+      "term": "AI-assisted engineering workflows",
+      "kind": "technology",
+      "user_attested": true
+    },
+    {
+      "term": "AI-augmented development",
+      "kind": "technology",
+      "user_attested": true
+    },
+    {
+      "term": "Autonomous ownership of scope and outcomes",
+      "kind": "technology",
+      "user_attested": true
+    },
+    {
+      "term": "CI/CD",
+      "kind": "technology",
+      "user_attested": true
+    },
+    {
+      "term": "Comfort with cloud-native environments",
+      "kind": "technology",
+      "user_attested": true
+    },
+    {
+      "term": "Experience with Django, Rest Framework, or FastAPI",
+      "kind": "technology",
+      "user_attested": true
+    },
+    {
+      "term": "Experience with the current JavaScript/TypeScript ecosystem",
+      "kind": "technology",
+      "user_attested": true
+    },
+    {
+      "term": "Hands-on AI fluency",
+      "kind": "technology",
+      "user_attested": true
+    },
+    {
+      "term": "Interest in AI-assisted engineering workflows",
+      "kind": "technology",
+      "user_attested": true
+    },
+    {
+      "term": "JavaScript/TypeScript",
+      "kind": "technology",
+      "user_attested": true
+    },
+    {
+      "term": "Modern frontend experience with React",
+      "kind": "technology",
+      "user_attested": true
+    },
+    {
+      "term": "Senior Full-stack Engineer",
+      "kind": "technology",
+      "user_attested": true
+    },
+    {
+      "term": "Significant production experience across both backend and frontend",
+      "kind": "technology",
+      "user_attested": true
+    },
+    {
+      "term": "Understanding of design principles behind scalable applications",
+      "kind": "technology",
+      "user_attested": true
+    },
+    {
+      "term": "Writing clean, readable, and maintainable code",
+      "kind": "technology",
+      "user_attested": true
+    },
+    {
+      "term": "automated testing",
+      "kind": "technology",
+      "user_attested": true
+    },
+    {
+      "term": "scalable application",
+      "kind": "technology",
+      "user_attested": true
+    },
+    {
+      "term": "AI agents",
+      "kind": "technology",
+      "user_attested": true
+    },
+    {
+      "term": "AI internal tooling",
+      "kind": "technology",
+      "user_attested": true
+    },
+    {
+      "term": "AI skills",
+      "kind": "technology",
+      "user_attested": true
+    },
+    {
+      "term": "Advance AI implementation across the tech organization",
+      "kind": "responsibility",
+      "user_attested": true
+    },
+    {
+      "term": "Bring visibility to ongoing work, risks, and dependencies",
+      "kind": "responsibility",
+      "user_attested": true
+    },
+    {
+      "term": "Collaborate closely with product, design, data, and operations stakeholders",
+      "kind": "responsibility",
+      "user_attested": true
+    },
+    {
+      "term": "Contribute to architecture evolution",
+      "kind": "responsibility",
+      "user_attested": true
+    },
+    {
+      "term": "Contribute to technical documentation and knowledge sharing",
+      "kind": "responsibility",
+      "user_attested": true
+    },
+    {
+      "term": "Design, build, and ship features end to end across the stack",
+      "kind": "responsibility",
+      "user_attested": true
+    },
+    {
+      "term": "Fluency in English",
+      "kind": "technology",
+      "user_attested": true
+    },
+    {
+      "term": "Implement improvements to enhance system performance and maintainability",
+      "kind": "responsibility",
+      "user_attested": true
+    },
+    {
+      "term": "JavaScript",
+      "kind": "technology",
+      "user_attested": true
+    },
+    {
+      "term": "Own quality on your scope",
+      "kind": "responsibility",
+      "user_attested": true
+    },
+    {
+      "term": "Participate in architecture discussions and system design decisions",
+      "kind": "responsibility",
+      "user_attested": true
+    },
+    {
+      "term": "Raise the team’s bar through design and code review",
+      "kind": "responsibility",
+      "user_attested": true
+    },
+    {
+      "term": "Singular",
+      "kind": "technology",
+      "user_attested": true
+    },
+    {
+      "term": "ownership",
+      "kind": "technology",
+      "user_attested": true
+    },
+    {
+      "term": "technical debt",
+      "kind": "technology",
+      "user_attested": true
+    },
+    {
+      "term": "AI-augmented development practices",
+      "kind": "technology",
+      "user_attested": true
     }
   ]
 }
