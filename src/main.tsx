@@ -1,6 +1,13 @@
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
-import { useEffect, useRef, useState } from 'react';
+import {
+  Component,
+  type ErrorInfo,
+  type ReactNode,
+  useEffect,
+  useRef,
+  useState,
+} from 'react';
 import { createRoot } from 'react-dom/client';
 import { JobPanel } from './job-panel';
 import './styles.css';
@@ -41,7 +48,18 @@ type ResumeResult = {
   error: string | null;
 };
 type Analysis = { summary: string };
-type PipelineResult = { analysis: Analysis; resume: ResumeResult };
+type PipelineResult = {
+  analysis: Analysis;
+  resume: ResumeResult;
+  recovered_from_artifacts?: boolean;
+  result_source?: 'command' | 'event' | 'recovery';
+};
+type StoredPipelineResult = PipelineResult & {
+  schema_version: number;
+  capture_received_at_ms: number;
+  language: Language;
+  recovered_from_artifacts: boolean;
+};
 type EvidenceKind = 'technology' | 'method_domain' | 'responsibility';
 type PreflightItem = {
   term: string;
@@ -82,6 +100,44 @@ const PIPELINE_STAGES = [
   ['locked_validation', 'Layout validation'],
   ['pdf_fit', 'PDF one-page fit'],
 ] as const;
+
+class AppErrorBoundary extends Component<
+  { children: ReactNode },
+  { error: string }
+> {
+  state = { error: '' };
+
+  static getDerivedStateFromError(reason: unknown) {
+    return { error: errorText(reason) };
+  }
+
+  componentDidCatch(error: Error, info: ErrorInfo) {
+    console.error('[ui-result] React render failure', error, info.componentStack);
+  }
+
+  render() {
+    if (this.state.error) {
+      return (
+        <main className={pageClass}>
+          <section className={panelClass} role='alert'>
+            <p className={eyebrowClass}>RESULT VIEW ERROR</p>
+            <h1 className='mb-2 text-[24px] font-bold'>
+              The result could not be rendered
+            </h1>
+            <p className='mt-0'>{this.state.error}</p>
+            <button
+              className={primaryButtonClass}
+              onClick={() => window.location.reload()}
+            >
+              Reload and recover result
+            </button>
+          </section>
+        </main>
+      );
+    }
+    return this.props.children;
+  }
+}
 
 const pageClass =
   'mx-auto max-w-[980px] px-7 pt-[52px] pb-[72px] font-sans text-[#19221d] max-[680px]:px-4 max-[680px]:py-7';
@@ -386,6 +442,7 @@ function ResultPanel({
       : 'The ATS summary is available, but no document artifact was produced.';
   return (
     <section
+      data-testid='completion-result-panel'
       className={`mt-7 grid grid-cols-[1fr_auto] gap-[18px] rounded-[14px] border bg-white p-7 shadow-[0_8px_24px_#1f2a2110] max-[680px]:grid-cols-1 ${
         partial ? 'border-[#e2c77c]' : 'border-[#dde3dc]'
       }`}
@@ -399,7 +456,14 @@ function ResultPanel({
               ? 'Tailoring summary ready; PDF not ready'
               : 'Tailoring summary ready'}
         </h2>
-        <p className='mt-0'>{result.analysis.summary}</p>
+        <p className='mt-0' data-testid='completion-summary'>
+          {result.analysis.summary}
+        </p>
+        {result.recovered_from_artifacts && (
+          <p className='mt-2 mb-0 text-xs font-bold text-[#176a46]'>
+            Recovered from the completed tailoring artifacts for this job.
+          </p>
+        )}
         <p className={mutedClass}>{saveMessage}</p>
         <p className='mt-3.5 mb-0 text-[13px] font-bold capitalize text-[#176a46]'>
           {resume.experience_bullets_changed} experience bullets{' '}
@@ -438,7 +502,9 @@ function ResultPanel({
       {report && (
         <div className='min-w-[110px] text-center max-[680px]:text-left'>
           <strong className='block text-4xl text-[#176a46]'>
+            <span data-testid='completion-ats-score'>
             {report.estimated_ats_coverage_score}
+            </span>
           </strong>
           <span className='text-xs text-[#627067]'>estimated ATS coverage</span>
         </div>
@@ -470,10 +536,12 @@ function ResultPanel({
         </p>
       )}
       {resume.tailored_content !== null && (
-        <TailoringChanges
-          content={resume.tailored_content}
-          changes={resume.content_changes}
-        />
+        <div className='contents' data-testid='completion-json-changes'>
+          <TailoringChanges
+            content={resume.tailored_content}
+            changes={resume.content_changes}
+          />
+        </div>
       )}
       {resume.tailored_content === null && (
         <p className='col-span-full m-0 border-t border-[#e7ebe7] pt-[18px] text-[#6f5521]'>
@@ -648,10 +716,106 @@ function App() {
   const [proofs, setProofs] = useState<Record<string, string>>({});
   const [bank, setBank] = useState<EvidenceBank | null>(null);
   const resultRef = useRef<HTMLDivElement | null>(null);
+  const captureRef = useRef<CapturedJob | null>(null);
+  const languageRef = useRef<Language>('en');
   const loadBank = () =>
     invoke<EvidenceBank>('get_evidence_bank')
       .then(setBank)
       .catch((reason) => setError(errorText(reason)));
+  function acceptResult(
+    candidate: PipelineResult,
+    source: 'command' | 'event' | 'recovery',
+    captureId: number,
+    targetLanguage: Language,
+  ) {
+    if (
+      captureRef.current?.received_at_ms !== captureId ||
+      languageRef.current !== targetLanguage
+    ) {
+      console.warn('[ui-result] rejected stale result', {
+        source,
+        captureId,
+        targetLanguage,
+      });
+      return false;
+    }
+    console.info('[ui-result] accepted result', {
+      source,
+      captureId,
+      targetLanguage,
+      status: candidate.resume.tailoring_status,
+      score: candidate.resume.report?.estimated_ats_coverage_score,
+      changes: candidate.resume.content_changes.length,
+    });
+    setResult({ ...candidate, result_source: source });
+    setError('');
+    return true;
+  }
+  async function recoverResultFor(
+    captured: CapturedJob,
+    targetLanguage: Language,
+    reason: string,
+  ) {
+    console.info('[ui-result] recovery requested', {
+      reason,
+      captureId: captured.received_at_ms,
+      language: targetLanguage,
+    });
+    try {
+      const stored = await invoke<StoredPipelineResult | null>(
+        'get_latest_pipeline_result',
+        {
+          language: targetLanguage,
+          captureId: captured.received_at_ms,
+        },
+      );
+      if (!stored) {
+        console.info('[ui-result] no matching stored result', { reason });
+        return;
+      }
+      acceptResult(
+        stored,
+        'recovery',
+        stored.capture_received_at_ms,
+        stored.language,
+      );
+    } catch (reason) {
+      console.error('[ui-result] recovery failed', reason);
+      setError(`Result recovery failed: ${errorText(reason)}`);
+    }
+  }
+  async function recoverLatestResultForCapture(
+    captured: CapturedJob,
+    reason: string,
+  ) {
+    console.info('[ui-result] any-language recovery requested', {
+      reason,
+      captureId: captured.received_at_ms,
+    });
+    try {
+      const stored = await invoke<StoredPipelineResult | null>(
+        'get_latest_pipeline_result_any_language',
+        { captureId: captured.received_at_ms },
+      );
+      if (!stored) {
+        console.info('[ui-result] no matching result in either language', {
+          reason,
+        });
+        return;
+      }
+      languageRef.current = stored.language;
+      setLanguage(stored.language);
+      acceptResult(
+        stored,
+        'recovery',
+        stored.capture_received_at_ms,
+        stored.language,
+      );
+    } catch (reason) {
+      console.error('[ui-result] any-language recovery failed', reason);
+      setError(`Result recovery failed: ${errorText(reason)}`);
+    }
+  }
   useEffect(() => {
     void fetch(BRIDGE_HEALTH_URL)
       .then(async (response) => {
@@ -663,12 +827,18 @@ function App() {
       })
       .catch((reason) => setError(errorText(reason)));
     void invoke<CapturedJob | null>('get_latest_job')
-      .then(setCapture)
+      .then((latest) => {
+        captureRef.current = latest;
+        setCapture(latest);
+        if (latest) void recoverLatestResultForCapture(latest, 'startup');
+      })
       .catch((reason) => setError(errorText(reason)));
     void loadBank();
     let unlisten: (() => void) | undefined;
     let unlistenProgress: (() => void) | undefined;
+    let unlistenResult: (() => void) | undefined;
     void listen<CapturedJob>('job-data-received', (event) => {
+      captureRef.current = event.payload;
       setCapture(event.payload);
       setResult(null);
       setPreflight(null);
@@ -680,24 +850,89 @@ function App() {
         unlisten = cleanup;
       })
       .catch((reason) => setError(errorText(reason)));
-    void listen<PipelineProgress>('resume-pipeline-progress', (event) =>
-      setProgressEvents((current) => [...current, event.payload]),
-    )
+    void listen<PipelineProgress>('resume-pipeline-progress', (event) => {
+      setProgressEvents((current) => [...current, event.payload]);
+      if (event.payload.stage === 'complete') {
+        const currentCapture = captureRef.current;
+        if (currentCapture) {
+          void recoverResultFor(
+            currentCapture,
+            languageRef.current,
+            'pipeline-complete-event',
+          );
+        }
+      }
+    })
       .then((cleanup) => {
         unlistenProgress = cleanup;
       })
       .catch((reason) => setError(errorText(reason)));
+    void listen<StoredPipelineResult>('resume-pipeline-result', (event) => {
+      const stored = event.payload;
+      console.info('[ui-result] result event received', {
+        captureId: stored.capture_received_at_ms,
+        language: stored.language,
+        status: stored.resume.tailoring_status,
+      });
+      acceptResult(
+        stored,
+        'event',
+        stored.capture_received_at_ms,
+        stored.language,
+      );
+    })
+      .then((cleanup) => {
+        unlistenResult = cleanup;
+      })
+      .catch((reason) => setError(errorText(reason)));
+    const onWindowError = (event: ErrorEvent) =>
+      console.error('[ui-result] window error', event.error ?? event.message);
+    const onUnhandledRejection = (event: PromiseRejectionEvent) =>
+      console.error('[ui-result] unhandled rejection', event.reason);
+    window.addEventListener('error', onWindowError);
+    window.addEventListener('unhandledrejection', onUnhandledRejection);
     return () => {
       unlisten?.();
       unlistenProgress?.();
+      unlistenResult?.();
+      window.removeEventListener('error', onWindowError);
+      window.removeEventListener('unhandledrejection', onUnhandledRejection);
     };
   }, []);
   useEffect(() => {
     if (!result) return;
-    resultRef.current?.focus({ preventScroll: true });
-    resultRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    console.info('[ui-result] result committed to React', {
+      status: result.resume.tailoring_status,
+      score: result.resume.report?.estimated_ats_coverage_score,
+      changes: result.resume.content_changes.length,
+      recoveredFromArtifacts: result.recovered_from_artifacts ?? false,
+    });
+    const frame = window.requestAnimationFrame(() => {
+      const element = resultRef.current;
+      const rect = element?.getBoundingClientRect();
+      const diagnostic = {
+        capture_id: captureRef.current?.received_at_ms ?? 0,
+        language: languageRef.current,
+        source: result.result_source ?? 'recovery',
+        completion_mounted: Boolean(element),
+        completion_visible: Boolean(
+          rect && rect.bottom > 0 && rect.top < window.innerHeight,
+        ),
+        score: result.resume.report?.estimated_ats_coverage_score ?? null,
+        change_count: result.resume.content_changes.length,
+        viewport_height: window.innerHeight,
+        rect_top: rect?.top ?? null,
+        rect_bottom: rect?.bottom ?? null,
+      };
+      console.info('[ui-result] completion screen measured', diagnostic);
+      void invoke('record_ui_result_state', { diagnostic }).catch((reason) =>
+        console.error('[ui-result] diagnostic write failed', reason),
+      );
+    });
+    return () => window.cancelAnimationFrame(frame);
   }, [result]);
   async function analyze() {
+    console.info('[ui-result] analysis command started', { language });
     setRunning(true);
     setError('');
     setResult(null);
@@ -706,6 +941,7 @@ function App() {
       const next = await invoke<PreflightResult>('analyze_latest_job', {
         language,
       });
+      console.info('[ui-result] analysis command resolved');
       setPreflight(next);
       setPreflightCollapsed(
         !next.items.some(
@@ -727,6 +963,7 @@ function App() {
         ),
       );
     } catch (reason) {
+      console.error('[ui-result] analysis command rejected', reason);
       setError(errorText(reason));
     } finally {
       setRunning(false);
@@ -734,6 +971,11 @@ function App() {
   }
   async function generate() {
     if (!preflight) return analyze();
+    const commandCaptureId = captureRef.current?.received_at_ms;
+    if (commandCaptureId === undefined) {
+      setError('The captured job is unavailable. Capture the job again.');
+      return;
+    }
     setPreflightCollapsed(true);
     setRunning(true);
     setError('');
@@ -748,6 +990,11 @@ function App() {
         kind: item.kind,
         proof_note: proofs[item.term]?.trim() || null,
       }));
+    console.info('[ui-result] tailoring command started', {
+      captureId: captureRef.current?.received_at_ms,
+      language,
+      bulletKeywordEmphasis,
+    });
     try {
       const resume = await invoke<ResumeResult>('generate_tailored_resume', {
         request: {
@@ -757,10 +1004,29 @@ function App() {
           bullet_keyword_emphasis: bulletKeywordEmphasis,
         },
       });
-      setResult({ analysis: preflight.analysis, resume });
+      console.info('[ui-result] tailoring command resolved', {
+        status: resume.tailoring_status,
+        score: resume.report?.estimated_ats_coverage_score,
+        changes: resume.content_changes.length,
+      });
+      acceptResult(
+        {
+          analysis: preflight.analysis,
+          resume,
+          recovered_from_artifacts: false,
+        },
+        'command',
+        commandCaptureId,
+        language,
+      );
       void loadBank();
     } catch (reason) {
+      console.error('[ui-result] tailoring command rejected', reason);
       setError(errorText(reason));
+      const currentCapture = captureRef.current;
+      if (currentCapture) {
+        void recoverResultFor(currentCapture, language, 'command-rejected');
+      }
     } finally {
       setRunning(false);
     }
@@ -782,12 +1048,15 @@ function App() {
     }
   }
   function changeLanguage(next: Language) {
+    languageRef.current = next;
     setLanguage(next);
     setPreflight(null);
     setPreflightCollapsed(false);
     setSelected(new Set());
     setProofs({});
     setResult(null);
+    const currentCapture = captureRef.current;
+    if (currentCapture) void recoverResultFor(currentCapture, next, 'language-change');
   }
   const job = capture?.parsed;
   return (
@@ -806,7 +1075,29 @@ function App() {
           {error}
         </p>
       )}
-      {!job ? (
+      {result ? (
+        <section data-testid='completion-screen'>
+          <div ref={resultRef}>
+            <ResultPanel result={result} action={action} />
+          </div>
+          <div className='mt-4 flex flex-wrap gap-2.5'>
+            <button
+              className={secondaryButtonClass}
+              onClick={() => setResult(null)}
+            >
+              Back to captured job
+            </button>
+          </div>
+          {progressEvents.length > 0 && (
+            <details className={compactPanelClass}>
+              <summary className='cursor-pointer font-bold text-[#176a46]'>
+                View completed pipeline activity
+              </summary>
+              <ProgressPanel events={progressEvents} running={false} />
+            </details>
+          )}
+        </section>
+      ) : !job ? (
         <section className={`${panelClass} max-w-[650px]`}>
           <h2 className='mb-2 text-[22px] font-bold'>
             Capture a job post to begin
@@ -871,37 +1162,39 @@ function App() {
                   FR
                 </button>
               </div>
-              <div className='grid gap-1 pt-2'>
-                <span className='text-[11px] font-bold text-[#526259]'>
-                  Experience keyword emphasis
-                </span>
-                <div
-                  className='flex overflow-hidden rounded-lg border border-[#cbd4cc] justify-evenly'
-                  role='group'
-                  aria-label='Experience keyword emphasis'
-                >
-                  {(['low', 'balanced', 'high'] as const).map((level) => (
-                    <button
-                      className={`cursor-pointer border-0 px-[13px] py-[11px] font-bold capitalize ${
-                        level === 'low' ? '' : 'border-l border-[#cbd4cc]'
-                      } ${
-                        bulletKeywordEmphasis === level
-                          ? 'bg-[#e7f1ea] text-[#12673d]'
-                          : 'bg-white text-[#19221d]'
-                      } disabled:cursor-wait disabled:opacity-65`}
-                      disabled={running}
-                      key={level}
-                      onClick={() => setBulletKeywordEmphasis(level)}
-                    >
-                      {level}
-                    </button>
-                  ))}
+              {preflight && (
+                <div className='grid gap-1 pt-2'>
+                  <span className='text-[11px] font-bold text-[#526259]'>
+                    Experience keyword emphasis
+                  </span>
+                  <div
+                    className='flex overflow-hidden rounded-lg border border-[#cbd4cc] justify-evenly'
+                    role='group'
+                    aria-label='Experience keyword emphasis'
+                  >
+                    {(['low', 'balanced', 'high'] as const).map((level) => (
+                      <button
+                        className={`cursor-pointer border-0 px-[13px] py-[11px] font-bold capitalize ${
+                          level === 'low' ? '' : 'border-l border-[#cbd4cc]'
+                        } ${
+                          bulletKeywordEmphasis === level
+                            ? 'bg-[#e7f1ea] text-[#12673d]'
+                            : 'bg-white text-[#19221d]'
+                        } disabled:cursor-wait disabled:opacity-65`}
+                        disabled={running}
+                        key={level}
+                        onClick={() => setBulletKeywordEmphasis(level)}
+                      >
+                        {level}
+                      </button>
+                    ))}
+                  </div>
+                  <small className='max-w-[245px] text-[11px] leading-tight text-[#627067]'>
+                    Higher levels spread supported job language across more
+                    relevant bullets.
+                  </small>
                 </div>
-                <small className='max-w-[245px] text-[11px] leading-tight text-[#627067]'>
-                  Higher levels spread supported job language across more
-                  relevant bullets.
-                </small>
-              </div>
+              )}
               <button
                 className={primaryButtonClass}
                 disabled={running}
@@ -915,12 +1208,7 @@ function App() {
               </button>
             </div>
           </section>
-          {result && (
-            <div ref={resultRef} tabIndex={-1} className='scroll-mt-5 outline-none'>
-              <ResultPanel result={result} action={action} />
-            </div>
-          )}
-          {preflight && !result && (
+          {preflight && (
             <section className={compactPanelClass} aria-live='polite'>
               <p className={eyebrowClass}>ATS ANALYSIS SUMMARY</p>
               <p className='mt-2 mb-0'>{preflight.analysis.summary}</p>
@@ -954,20 +1242,12 @@ function App() {
                 }
               />
             ))}
-          {(running || (progressEvents.length > 0 && !result)) && (
+          {(running || progressEvents.length > 0) && (
             <ProgressPanel events={progressEvents} running={running} />
-          )}
-          {result && progressEvents.length > 0 && (
-            <details className={compactPanelClass}>
-              <summary className='cursor-pointer font-bold text-[#176a46]'>
-                View completed pipeline activity
-              </summary>
-              <ProgressPanel events={progressEvents} running={false} />
-            </details>
           )}
         </>
       )}
-      {bank && bank.entries.length > 0 && (
+      {!result && bank && bank.entries.length > 0 && (
         <details className={compactPanelClass}>
           <summary className='cursor-pointer list-none [&::-webkit-details-marker]:hidden'>
             <span className='flex items-center justify-between gap-4'>
@@ -1004,4 +1284,8 @@ function App() {
   );
 }
 
-createRoot(document.getElementById('root')!).render(<App />);
+createRoot(document.getElementById('root')!).render(
+  <AppErrorBoundary>
+    <App />
+  </AppErrorBoundary>,
+);

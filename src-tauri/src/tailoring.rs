@@ -722,7 +722,10 @@ fn count_changed_experience_bullets(base: &serde_json::Value, tailored: &serde_j
         .count() as u32
 }
 
-fn content_changes(base: &serde_json::Value, tailored: &serde_json::Value) -> Vec<ContentChange> {
+pub(crate) fn content_changes(
+    base: &serde_json::Value,
+    tailored: &serde_json::Value,
+) -> Vec<ContentChange> {
     let mut changes = Vec::new();
     let base_experience = base["experience"]
         .as_array()

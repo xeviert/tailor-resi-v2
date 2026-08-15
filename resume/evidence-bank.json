@@ -218,7 +218,7 @@
     },
     {
       "term": "cross-functional collaboration",
-      "kind": "technology",
+      "kind": "method_domain",
       "user_attested": true
     },
     {
@@ -423,7 +423,7 @@
     },
     {
       "term": "AI-augmented development",
-      "kind": "technology",
+      "kind": "method_domain",
       "user_attested": true
     },
     {
@@ -683,7 +683,7 @@
     },
     {
       "term": "Observability",
-      "kind": "method_domain",
+      "kind": "technology",
       "user_attested": true
     },
     {
@@ -699,6 +699,186 @@
     {
       "term": "Production systems",
       "kind": "method_domain",
+      "user_attested": true
+    },
+    {
+      "term": "5+ years experience",
+      "kind": "technology",
+      "user_attested": true
+    },
+    {
+      "term": "Backend and frontend production systems",
+      "kind": "technology",
+      "user_attested": true
+    },
+    {
+      "term": "Cloud-native development",
+      "kind": "technology",
+      "user_attested": true
+    },
+    {
+      "term": "End-to-end delivery",
+      "kind": "technology",
+      "user_attested": true
+    },
+    {
+      "term": "Modular architecture",
+      "kind": "method_domain",
+      "user_attested": true
+    },
+    {
+      "term": "Production quality ownership",
+      "kind": "method_domain",
+      "user_attested": true
+    },
+    {
+      "term": "Mentor other engineers",
+      "kind": "responsibility",
+      "user_attested": true
+    },
+    {
+      "term": "Architecture decision-making",
+      "kind": "technology",
+      "user_attested": true
+    },
+    {
+      "term": "Autonomous execution",
+      "kind": "technology",
+      "user_attested": true
+    },
+    {
+      "term": "Code quality focus",
+      "kind": "technology",
+      "user_attested": true
+    },
+    {
+      "term": "Energy transition awareness",
+      "kind": "technology",
+      "user_attested": true
+    },
+    {
+      "term": "High-value feature delivery",
+      "kind": "technology",
+      "user_attested": true
+    },
+    {
+      "term": "Minimum three years Node.js development",
+      "kind": "technology",
+      "user_attested": true
+    },
+    {
+      "term": "Minimum three years TypeScript development",
+      "kind": "technology",
+      "user_attested": true
+    },
+    {
+      "term": "Pragmatic delivery",
+      "kind": "method_domain",
+      "user_attested": true
+    },
+    {
+      "term": "Startup environment experience",
+      "kind": "technology",
+      "user_attested": true
+    },
+    {
+      "term": "Sustainability awareness",
+      "kind": "technology",
+      "user_attested": true
+    },
+    {
+      "term": "GitHub Actions",
+      "kind": "technology",
+      "user_attested": true
+    },
+    {
+      "term": "Manage maintenance and incidents",
+      "kind": "responsibility",
+      "user_attested": true
+    },
+    {
+      "term": "Manage vehicle lifecycle workflows",
+      "kind": "responsibility",
+      "user_attested": true
+    },
+    {
+      "term": "Architecture pattern basics",
+      "kind": "technology",
+      "user_attested": true
+    },
+    {
+      "term": "Associated framework knowledge",
+      "kind": "technology",
+      "user_attested": true
+    },
+    {
+      "term": "Build tools",
+      "kind": "responsibility",
+      "user_attested": true
+    },
+    {
+      "term": "CI/CD tool experience",
+      "kind": "technology",
+      "user_attested": true
+    },
+    {
+      "term": "Cross-functional teamwork",
+      "kind": "technology",
+      "user_attested": true
+    },
+    {
+      "term": "Decision-making and arbitration",
+      "kind": "technology",
+      "user_attested": true
+    },
+    {
+      "term": "Java or JavaScript/TypeScript",
+      "kind": "technology",
+      "user_attested": true
+    },
+    {
+      "term": "Minimum five years’ experience",
+      "kind": "technology",
+      "user_attested": true
+    },
+    {
+      "term": "Software quality",
+      "kind": "technology",
+      "user_attested": true
+    },
+    {
+      "term": "Team support and development",
+      "kind": "technology",
+      "user_attested": true
+    },
+    {
+      "term": "Technical leadership",
+      "kind": "technology",
+      "user_attested": true
+    },
+    {
+      "term": "NodeJs",
+      "kind": "technology",
+      "user_attested": true
+    },
+    {
+      "term": "ReactJS",
+      "kind": "technology",
+      "user_attested": true
+    },
+    {
+      "term": "Svelte",
+      "kind": "technology",
+      "user_attested": true
+    },
+    {
+      "term": "Track consultants’ development','Accelerate consultant skills','Support career pathways','Coordinate internal communication','Coordinate external communication','Code within project teams','Contribute to technical vision','Maintain technical quality','Improve technical quality','Partner with Design teams','Partner with Ops teams','Act as a team Lead','Facilitate delivery and rituals','Mentor clients and teams','Provide training and coaching",
+      "kind": "responsibility",
+      "user_attested": true
+    },
+    {
+      "term": "Vue.js",
+      "kind": "technology",
       "user_attested": true
     }
   ]

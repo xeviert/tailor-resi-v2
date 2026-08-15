@@ -18,6 +18,9 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             commands::ping,
             commands::get_latest_job,
+            commands::get_latest_pipeline_result,
+            commands::get_latest_pipeline_result_any_language,
+            commands::record_ui_result_state,
             commands::analyze_latest_job,
             commands::generate_tailored_resume,
             commands::get_evidence_bank,
