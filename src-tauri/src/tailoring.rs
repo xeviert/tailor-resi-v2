@@ -1242,7 +1242,7 @@ mod tests {
     use super::{
         build_tailoring_prompt, civil_date_from_days, company_role_slug,
         parse_tailored_resume_from_response, partial_docx_response, slugify,
-        validate_tailored_content, write_variant_files, TailoredResume, TailoringReport,
+        validate_tailored_content, write_variant_files, BulletKeywordEmphasis, TailorRequest, TailoredResume, TailoringReport,
         MAX_COMPANY_ROLE_SLUG_LEN,
     };
     use crate::analysis::{JobAnalysis, KeywordSignal};
@@ -1299,6 +1299,7 @@ mod tests {
             &analysis(),
             &base_resume(),
             &[],
+            BulletKeywordEmphasis::Balanced,
             false,
         );
 
@@ -1316,9 +1317,26 @@ mod tests {
 
     #[test]
     fn concise_retry_prompt_preserves_content_constraints() {
-        let prompt = build_tailoring_prompt("en", &json!({}), &analysis(), &base_resume(), &[], true);
+        let prompt = build_tailoring_prompt("en", &json!({}), &analysis(), &base_resume(), &[], BulletKeywordEmphasis::Balanced, true);
         assert!(prompt.contains("overflowed to a second page"));
         assert!(prompt.contains("Do not shorten by deleting responsibilities"));
+    }
+
+    #[test]
+    fn high_bullet_emphasis_prioritizes_breadth() {
+        let prompt = build_tailoring_prompt("en", &json!({}), &analysis(), &base_resume(), &[], BulletKeywordEmphasis::High, false);
+        assert!(prompt.contains("every factually relevant experience bullet"));
+        assert!(prompt.contains("Prioritize breadth across bullets"));
+    }
+
+    #[test]
+    fn omitted_bullet_emphasis_defaults_to_balanced() {
+        let request: TailorRequest = serde_json::from_value(json!({
+            "language": "en",
+            "parsed": {},
+            "analysis": analysis()
+        })).unwrap();
+        assert_eq!(request.bullet_keyword_emphasis, BulletKeywordEmphasis::Balanced);
     }
 
     #[test]
@@ -1475,6 +1493,8 @@ mod tests {
             &docx_path,
             &pdf_path,
             None,
+            BulletKeywordEmphasis::Balanced,
+            0,
             TailoringReport {
                 covered_keywords: vec![],
                 omitted_unsupported_keywords: vec![],
