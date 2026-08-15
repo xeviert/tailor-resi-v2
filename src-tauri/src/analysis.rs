@@ -76,7 +76,11 @@ pub fn build_analysis_prompt(parsed_job: &serde_json::Value) -> String {
         "Analyze this normalized job post for ATS resume-tailoring signals.\n\
          Return only the schema fields. Ground every keyword and phrase in the job post.\n\
          Do not invent credentials, experience, metrics, responsibilities, or tools not supported by the post.\n\
-         Prefer exact technology, framework, certification, job-title, and domain wording when useful.\n\
+         Return short, atomic capability terms, normally one to six words.\n\
+         Prefer exact technology, framework, certification, and domain wording when useful.\n\
+         Semantically deduplicate terms across every array; choose one clear ATS-friendly label per capability.\n\
+         Do not put job titles, company names, generic personality traits, or full requirement sentences in capability arrays.\n\
+         Classify tools and frameworks as technology, working methods and business domains as method_domain, and claims about actions performed as responsibility.\n\
          Focus on analysis for a later resume-writing layer; do not rewrite resume bullets.\n\n\
          Normalized job JSON:\n{compact_job}"
     )
@@ -105,6 +109,7 @@ fn analysis_schema() -> serde_json::Value {
             "seniority": { "type": "string" },
             "core_keywords": {
                 "type": "array",
+                "maxItems": 12,
                 "items": {
                     "type": "object",
                     "additionalProperties": false,
@@ -117,14 +122,14 @@ fn analysis_schema() -> serde_json::Value {
                     }
                 }
             },
-            "required_skills": { "type": "array", "items": { "type": "string" } },
-            "preferred_skills": { "type": "array", "items": { "type": "string" } },
-            "tools_and_platforms": { "type": "array", "items": { "type": "string" } },
-            "domain_terms": { "type": "array", "items": { "type": "string" } },
-            "responsibility_phrases": { "type": "array", "items": { "type": "string" } },
-            "achievement_angles": { "type": "array", "items": { "type": "string" } },
-            "ats_phrase_bank": { "type": "array", "items": { "type": "string" } },
-            "must_not_claim_without_evidence": { "type": "array", "items": { "type": "string" } },
+            "required_skills": { "type": "array", "maxItems": 10, "items": { "type": "string" } },
+            "preferred_skills": { "type": "array", "maxItems": 8, "items": { "type": "string" } },
+            "tools_and_platforms": { "type": "array", "maxItems": 12, "items": { "type": "string" } },
+            "domain_terms": { "type": "array", "maxItems": 8, "items": { "type": "string" } },
+            "responsibility_phrases": { "type": "array", "maxItems": 8, "items": { "type": "string" } },
+            "achievement_angles": { "type": "array", "maxItems": 8, "items": { "type": "string" } },
+            "ats_phrase_bank": { "type": "array", "maxItems": 15, "items": { "type": "string" } },
+            "must_not_claim_without_evidence": { "type": "array", "maxItems": 12, "items": { "type": "string" } },
             "summary": { "type": "string" }
         }
     })
@@ -225,6 +230,8 @@ mod tests {
         assert!(prompt.contains("Rust Engineer"));
         assert!(prompt.contains("Axum"));
         assert!(prompt.contains("Do not invent"));
+        assert!(prompt.contains("Semantically deduplicate"));
+        assert!(prompt.contains("one to six words"));
     }
 
     #[test]

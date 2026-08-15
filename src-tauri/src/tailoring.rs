@@ -2,7 +2,7 @@ use crate::{analysis::JobAnalysis, evidence::EvidenceEntry};
 use reqwest::StatusCode;
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::BTreeSet,
+    collections::{BTreeMap, BTreeSet},
     path::{Path, PathBuf},
     process::Command,
 };
@@ -120,9 +120,111 @@ impl BulletKeywordEmphasis {
         match self {
             Self::Low => "Bullet keyword emphasis is LOW: add supported job language only to the strongest direct bullet matches.\n",
             Self::Balanced => "Bullet keyword emphasis is BALANCED: before relying on skills-section additions, spread one natural, supported job term or phrase across roughly half of the factually relevant experience bullets.\n",
-            Self::High => "Bullet keyword emphasis is HIGH: experience bullets are the primary ATS surface, not skills. You MUST substantively rewrite every factually relevant experience bullet with natural, supported job language before changing skills. For every bullet, return a bullet_rewrite_decision: use rewritten when it has a truthful job match and no_relevant_match only when the bullet has no truthful connection to any job responsibility, technology, domain term, or achievement angle. A skills-only response is invalid.\n",
+            Self::High => "Bullet keyword emphasis is HIGH: experience bullets are the primary ATS surface, not skills. You MUST return every experience bullet with different, truthful text before changing skills. A rewrite counts only when the returned bullet text differs from the input bullet text; never label an unchanged bullet as rewritten. Use natural, supported job language wherever the original bullet supports it. If a bullet has no direct job-term match, still give it an accurate stylistic rephrase that preserves its original facts. In HIGH mode every bullet_rewrite_decision must be rewritten; no_relevant_match is not allowed. A skills-only response is invalid.\n",
         }
     }
+}
+
+fn normalize_high_emphasis_bullet_rewrite_decisions(
+    base: &serde_json::Value,
+    tailored: &mut TailoredResume,
+) {
+    let supplied_rationales = tailored
+        .report
+        .bullet_rewrite_decisions
+        .iter()
+        .filter_map(|decision| {
+            (!decision.rationale.trim().is_empty()).then_some((
+                (decision.experience_index, decision.bullet_index),
+                (decision.outcome.clone(), decision.rationale.clone()),
+            ))
+        })
+        .collect::<BTreeMap<_, _>>();
+
+    let mut decisions = Vec::new();
+    for (experience_index, (base_job, tailored_job)) in base["experience"]
+        .as_array()
+        .expect("validated base experience")
+        .iter()
+        .zip(
+            tailored.content["experience"]
+                .as_array()
+                .expect("validated tailored experience"),
+        )
+        .enumerate()
+    {
+        for (bullet_index, (before, after)) in base_job["bullets"]
+            .as_array()
+            .expect("validated base bullets")
+            .iter()
+            .zip(
+                tailored_job["bullets"]
+                    .as_array()
+                    .expect("validated tailored bullets"),
+            )
+            .enumerate()
+        {
+            let outcome = if before == after {
+                BulletRewriteOutcome::NoRelevantMatch
+            } else {
+                BulletRewriteOutcome::Rewritten
+            };
+            let rationale = supplied_rationales
+                .get(&(experience_index, bullet_index))
+                .filter(|(supplied_outcome, _)| *supplied_outcome == outcome)
+                .map(|(_, rationale)| rationale.clone())
+                .unwrap_or_else(|| match outcome {
+                    BulletRewriteOutcome::Rewritten => {
+                        "Derived from the saved experience-bullet rewrite.".to_string()
+                    }
+                    BulletRewriteOutcome::NoRelevantMatch => {
+                        "No experience-bullet text change was returned.".to_string()
+                    }
+                });
+            decisions.push(BulletRewriteDecision {
+                experience_index,
+                bullet_index,
+                outcome,
+                rationale,
+            });
+        }
+    }
+    tailored.report.bullet_rewrite_decisions = decisions;
+}
+
+fn unchanged_experience_bullets(base: &serde_json::Value, tailored: &serde_json::Value) -> String {
+    base["experience"]
+        .as_array()
+        .expect("validated base experience")
+        .iter()
+        .zip(
+            tailored["experience"]
+                .as_array()
+                .expect("validated tailored experience"),
+        )
+        .enumerate()
+        .flat_map(|(experience_index, (base_job, tailored_job))| {
+            base_job["bullets"]
+                .as_array()
+                .expect("validated base bullets")
+                .iter()
+                .zip(
+                    tailored_job["bullets"]
+                        .as_array()
+                        .expect("validated tailored bullets"),
+                )
+                .enumerate()
+                .filter_map(move |(bullet_index, (before, after))| {
+                    (before == after).then(|| {
+                        format!(
+                            "experience {experience_index}, bullet {bullet_index}: {}",
+                            before.as_str().expect("validated base bullet")
+                        )
+                    })
+                })
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -560,8 +662,8 @@ fn validate_high_emphasis_bullet_rewrites(
         }
     }
 
-    if changed.is_empty() {
-        return invalid("high bullet emphasis requires at least one experience bullet rewrite; skills-only tailoring is not accepted");
+    if changed.len() != expected.len() {
+        return invalid("high bullet emphasis requires every experience bullet to be rewritten; skills-only tailoring is not accepted");
     }
 
     let mut decisions = BTreeSet::new();
@@ -1113,7 +1215,7 @@ pub async fn tailor_and_render_with_progress(
             },
             Some(attempt),
         );
-        let tailored = match tailor_resume(
+        let mut tailored = match tailor_resume(
             &config,
             language,
             &request.parsed,
@@ -1164,10 +1266,12 @@ pub async fn tailor_and_render_with_progress(
             return Err(error);
         }
         if request.bullet_keyword_emphasis == BulletKeywordEmphasis::High {
+            normalize_high_emphasis_bullet_rewrite_decisions(&base_resume, &mut tailored);
             if let Err(error) = validate_high_emphasis_bullet_rewrites(&base_resume, &tailored) {
                 if attempt < MAX_TAILORING_ATTEMPTS {
                     correction_instruction = Some(format!(
-                        "Your preceding High-emphasis response was rejected: {error}. Rewrite the missing factually relevant bullets now. Do not compensate by adding more skills.\n\n"
+                        "Your preceding High-emphasis response was rejected: {error}. Replace the text of every unchanged experience bullet below. Keep every claim truthful, but use a faithful stylistic rephrase when a bullet has no direct job-keyword match. Do not compensate by adding more skills, changing only the report, or labelling unchanged text as rewritten.\n\nUnchanged bullets:\n{}\n\n",
+                        unchanged_experience_bullets(&base_resume, &tailored.content),
                     ));
                     progress(
                         reporter,
@@ -1178,14 +1282,17 @@ pub async fn tailor_and_render_with_progress(
                     );
                     continue;
                 }
+                let final_error = invalid_message(
+                    "High emphasis could not rewrite every experience bullet after 3 attempts; skills-only tailoring is not accepted",
+                );
                 progress(
                     reporter,
                     "safety_validation",
                     "failed",
-                    error.to_string(),
+                    final_error.to_string(),
                     Some(attempt),
                 );
-                return Err(error);
+                return Err(final_error);
             }
         }
         correction_instruction = None;
@@ -1511,6 +1618,7 @@ mod tests {
     use super::{
         build_tailoring_prompt, civil_date_from_days, company_role_slug, content_changes,
         parse_tailored_resume_from_response, partial_docx_response, pdf_page_count, slugify,
+        normalize_high_emphasis_bullet_rewrite_decisions, unchanged_experience_bullets,
         validate_high_emphasis_bullet_rewrites, validate_tailored_content, write_variant_files,
         BulletKeywordEmphasis, BulletRewriteDecision, BulletRewriteOutcome, TailorRequest,
         TailoredResume, TailoringReport, MAX_COMPANY_ROLE_SLUG_LEN,
@@ -1615,7 +1723,7 @@ mod tests {
             false,
             None,
         );
-        assert!(prompt.contains("every factually relevant experience bullet"));
+        assert!(prompt.contains("every experience bullet with different, truthful text"));
         assert!(prompt.contains("primary ATS surface, not skills"));
         assert!(prompt.contains("A skills-only response is invalid"));
     }
@@ -1767,7 +1875,7 @@ mod tests {
     }
 
     #[test]
-    fn high_emphasis_rejects_unchanged_bullet_marked_rewritten() {
+    fn high_emphasis_rejects_an_unchanged_bullet() {
         let base = base_resume();
         let mut content = base.clone();
         content["experience"][0]["bullets"][1] = json!("Improved reliable Rust services.");
@@ -1790,7 +1898,44 @@ mod tests {
         );
 
         let error = validate_high_emphasis_bullet_rewrites(&base, &tailored).unwrap_err();
-        assert!(error.to_string().contains("unchanged"));
+        assert!(error.to_string().contains("every experience bullet"));
+    }
+
+    #[test]
+    fn high_emphasis_normalization_uses_saved_bullet_text_as_the_source_of_truth() {
+        let base = base_resume();
+        let mut content = base.clone();
+        content["experience"][0]["bullets"][0] = json!("Built reliable Rust APIs.");
+        content["experience"][0]["bullets"][1] = json!("Strengthened production service reliability.");
+        let mut tailored = high_emphasis_tailored_resume(
+            content,
+            vec![
+                BulletRewriteDecision {
+                    experience_index: 0,
+                    bullet_index: 0,
+                    outcome: BulletRewriteOutcome::NoRelevantMatch,
+                    rationale: "No job match.".to_string(),
+                },
+                BulletRewriteDecision {
+                    experience_index: 0,
+                    bullet_index: 1,
+                    outcome: BulletRewriteOutcome::Rewritten,
+                    rationale: "Rust API match.".to_string(),
+                },
+            ],
+        );
+
+        normalize_high_emphasis_bullet_rewrite_decisions(&base, &mut tailored);
+
+        assert_eq!(
+            tailored.report.bullet_rewrite_decisions[0].outcome,
+            BulletRewriteOutcome::Rewritten
+        );
+        assert_eq!(
+            tailored.report.bullet_rewrite_decisions[1].outcome,
+            BulletRewriteOutcome::Rewritten
+        );
+        validate_high_emphasis_bullet_rewrites(&base, &tailored).unwrap();
     }
 
     #[test]
@@ -1798,6 +1943,7 @@ mod tests {
         let base = base_resume();
         let mut content = base.clone();
         content["experience"][0]["bullets"][0] = json!("Built reliable Rust APIs.");
+        content["experience"][0]["bullets"][1] = json!("Strengthened production service reliability.");
         let tailored = high_emphasis_tailored_resume(
             content,
             vec![BulletRewriteDecision {
@@ -1817,6 +1963,7 @@ mod tests {
         let base = base_resume();
         let mut content = base.clone();
         content["experience"][0]["bullets"][0] = json!("Built reliable Rust APIs.");
+        content["experience"][0]["bullets"][1] = json!("Strengthened production service reliability.");
         let tailored = high_emphasis_tailored_resume(
             content,
             vec![
@@ -1829,13 +1976,25 @@ mod tests {
                 BulletRewriteDecision {
                     experience_index: 0,
                     bullet_index: 1,
-                    outcome: BulletRewriteOutcome::NoRelevantMatch,
-                    rationale: "No truthful job-specific connection.".to_string(),
+                    outcome: BulletRewriteOutcome::Rewritten,
+                    rationale: "Reliability work aligns with the target role.".to_string(),
                 },
             ],
         );
 
         validate_high_emphasis_bullet_rewrites(&base, &tailored).unwrap();
+    }
+
+    #[test]
+    fn high_emphasis_lists_each_unchanged_bullet_for_the_retry_prompt() {
+        let base = base_resume();
+        let mut content = base.clone();
+        content["experience"][0]["bullets"][0] = json!("Built reliable Rust APIs.");
+
+        assert_eq!(
+            unchanged_experience_bullets(&base, &content),
+            "experience 0, bullet 1: Improved reliability."
+        );
     }
 
     #[test]

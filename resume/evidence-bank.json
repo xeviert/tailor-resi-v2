@@ -498,7 +498,7 @@
     },
     {
       "term": "scalable application",
-      "kind": "technology",
+      "kind": "method_domain",
       "user_attested": true
     },
     {
@@ -588,12 +588,117 @@
     },
     {
       "term": "technical debt",
-      "kind": "technology",
+      "kind": "method_domain",
       "user_attested": true
     },
     {
       "term": "AI-augmented development practices",
       "kind": "technology",
+      "user_attested": true
+    },
+    {
+      "term": "Automated testing, peer review, observability, and production monitoring",
+      "kind": "technology",
+      "user_attested": true
+    },
+    {
+      "term": "End-to-end feature design, build, and shipment",
+      "kind": "technology",
+      "user_attested": true
+    },
+    {
+      "term": "Participation in architecture discussions and system design decisions",
+      "kind": "technology",
+      "user_attested": true
+    },
+    {
+      "term": "Understanding of design principles behind a scalable application",
+      "kind": "technology",
+      "user_attested": true
+    },
+    {
+      "term": "English fluency",
+      "kind": "technology",
+      "user_attested": true
+    },
+    {
+      "term": "Identify and address areas of technical debt",
+      "kind": "responsibility",
+      "user_attested": true
+    },
+    {
+      "term": "Internal tooling",
+      "kind": "technology",
+      "user_attested": true
+    },
+    {
+      "term": "AI fluency and genuine interest in AI-assisted engineering workflows",
+      "kind": "technology",
+      "user_attested": true
+    },
+    {
+      "term": "Cross-functional collaboration with product, design, data, and operations",
+      "kind": "technology",
+      "user_attested": true
+    },
+    {
+      "term": "Autonomous ownership",
+      "kind": "technology",
+      "user_attested": true
+    },
+    {
+      "term": "Clean, readable, and maintainable code",
+      "kind": "technology",
+      "user_attested": true
+    },
+    {
+      "term": "Cloud-native environments",
+      "kind": "technology",
+      "user_attested": true
+    },
+    {
+      "term": "Current JavaScript/TypeScript ecosystem",
+      "kind": "technology",
+      "user_attested": true
+    },
+    {
+      "term": "Event-driven patterns",
+      "kind": "technology",
+      "user_attested": true
+    },
+    {
+      "term": "Fundamental design principles behind a scalable application",
+      "kind": "technology",
+      "user_attested": true
+    },
+    {
+      "term": "Design and code review",
+      "kind": "technology",
+      "user_attested": true
+    },
+    {
+      "term": "Maintainability",
+      "kind": "method_domain",
+      "user_attested": true
+    },
+    {
+      "term": "Observability",
+      "kind": "method_domain",
+      "user_attested": true
+    },
+    {
+      "term": "Product features",
+      "kind": "method_domain",
+      "user_attested": true
+    },
+    {
+      "term": "Production monitoring",
+      "kind": "method_domain",
+      "user_attested": true
+    },
+    {
+      "term": "Production systems",
+      "kind": "method_domain",
       "user_attested": true
     }
   ]

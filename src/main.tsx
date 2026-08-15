@@ -48,7 +48,14 @@ type PreflightItem = {
   kind: EvidenceKind;
   importance: number;
   source: 'base_resume' | 'evidence_bank' | 'needs_approval';
+  resolution:
+    | 'auto_available'
+    | 'confirmation_required'
+    | 'auto_omitted';
+  resolution_reason: string;
+  matched_term: string | null;
   proof_note: string | null;
+  eligible_for_bullets: boolean;
 };
 type PreflightResult = { analysis: Analysis; items: PreflightItem[] };
 type EvidenceEntry = {
@@ -187,6 +194,36 @@ function ProgressPanel({
         >
           {latest.message}
         </p>
+      )}
+      {events.some(
+        (event) =>
+          (event.stage === 'resume_tailoring' ||
+            event.stage === 'safety_validation') &&
+          event.attempt !== null,
+      ) && (
+        <ol className='mt-3 mb-0 grid list-none gap-2 p-0 text-[12px] leading-snug'>
+          {events
+            .filter(
+              (event) =>
+                (event.stage === 'resume_tailoring' ||
+                  event.stage === 'safety_validation') &&
+                event.attempt !== null,
+            )
+            .map((event, index) => (
+              <li
+                className={`rounded-md px-3 py-2 ${progressDetailClass[event.status]}`}
+                key={`${event.stage}-${event.attempt}-${event.status}-${index}`}
+              >
+                <strong>
+                  Attempt {event.attempt} of {event.total_attempts ?? 3} ·{' '}
+                  {event.stage === 'resume_tailoring'
+                    ? 'Resume tailoring'
+                    : 'Safety validation'}
+                </strong>
+                <span> — {event.message}</span>
+              </li>
+            ))}
+        </ol>
       )}
     </section>
   );
@@ -447,6 +484,15 @@ function PreflightPanel({
   onToggle: (term: string) => void;
   onProof: (term: string, proof: string) => void;
 }) {
+  const confirmationItems = preflight.items.filter(
+    (item) => item.resolution === 'confirmation_required',
+  );
+  const availableCount = preflight.items.filter(
+    (item) => item.resolution === 'auto_available',
+  ).length;
+  const omittedCount = preflight.items.filter(
+    (item) => item.resolution === 'auto_omitted',
+  ).length;
   const groups: [EvidenceKind, string, string][] = [
     [
       'technology',
@@ -468,14 +514,15 @@ function PreflightPanel({
     <section className={compactPanelClass}>
       <p className={eyebrowClass}>EVIDENCE PREFLIGHT</p>
       <h2 className='mb-2 text-[22px] font-bold'>
-        Confirm what you can truthfully claim
+        Confirm only the unresolved claims
       </h2>
       <p className={mutedClass}>
-        Base-resume matches are already available. Selected evidence is saved to
-        your local bank and can be reused on future jobs.
+        {availableCount} supported signal{availableCount === 1 ? ' is' : 's are'}{' '}
+        ready automatically. {omittedCount} lower-value or unsupported signal
+        {omittedCount === 1 ? ' was' : 's were'} omitted without interrupting you.
       </p>
       {groups.map(([kind, title, hint]) => {
-        const items = preflight.items.filter((item) => item.kind === kind);
+        const items = confirmationItems.filter((item) => item.kind === kind);
         return items.length ? (
           <div
             className='mt-[22px] border-t border-[#e7ebe7] pt-[18px]'
@@ -484,8 +531,7 @@ function PreflightPanel({
             <h3 className='mt-0 mb-[3px] text-[15px] font-bold'>{title}</h3>
             <p className='mb-3 text-[13px] text-[#627067]'>{hint}</p>
             {items.map((item) => {
-              const isBase = item.source === 'base_resume';
-              const checked = isBase || selected.has(item.term);
+              const checked = selected.has(item.term);
               const proof = proofs[item.term] ?? item.proof_note ?? '';
               return (
                 <article
@@ -501,22 +547,16 @@ function PreflightPanel({
                       className='mt-[3px] h-4 w-4 accent-[#176a46]'
                       type='checkbox'
                       checked={checked}
-                      disabled={isBase}
                       onChange={() => onToggle(item.term)}
                     />
                     <span>
                       <strong className='block'>{item.term}</strong>
                       <small className='mt-[3px] block text-xs leading-snug text-[#627067]'>
-                        {isBase
-                          ? 'Already supported by your base resume'
-                          : item.source === 'evidence_bank'
-                            ? 'Saved in your evidence bank'
-                            : 'Needs your approval'}{' '}
-                        - priority {item.importance}/5
+                        Needs confirmation - priority {item.importance}/5
                       </small>
                     </span>
                   </label>
-                  {!isBase && checked && (
+                  {checked && (
                     <label className='mt-3 ml-[26px] block max-[680px]:ml-0'>
                       <span className='mb-[5px] block text-xs font-bold text-[#627067]'>
                         Proof note (optional; required for experience bullets)
@@ -553,17 +593,27 @@ function PreflightSummary({
   const approved = preflight.items.filter(
     (item) => item.source === 'base_resume' || selected.has(item.term),
   ).length;
+  const questions = preflight.items.filter(
+    (item) => item.resolution === 'confirmation_required',
+  ).length;
+  const omitted = preflight.items.filter(
+    (item) => item.resolution === 'auto_omitted',
+  ).length;
   return (
     <section className='mt-4 flex items-center justify-between gap-4 rounded-xl border border-[#a9ddba] bg-[#f8fcf9] px-[18px] py-4 max-[680px]:flex-col max-[680px]:items-start'>
       <div>
-        <p className={`${eyebrowClass} mb-1`}>EVIDENCE CONFIRMED</p>
-        <strong>{approved} job signals are available for tailoring</strong>
+        <p className={`${eyebrowClass} mb-1`}>EVIDENCE READY</p>
+        <strong>{approved} supported job signals are available</strong>
+        <small className='mt-1 block text-xs font-normal text-[#627067]'>
+          {questions} clarification{questions === 1 ? '' : 's'} reviewed ·{' '}
+          {omitted} low-value or unsupported signal{omitted === 1 ? '' : 's'} omitted
+        </small>
       </div>
       <button
         className='cursor-pointer whitespace-nowrap rounded-lg border border-[#a9ddba] bg-white px-[11px] py-[9px] font-bold text-[#176a46]'
         onClick={onReopen}
       >
-        Review evidence
+        Review decisions
       </button>
     </section>
   );
@@ -637,7 +687,11 @@ function App() {
         language,
       });
       setPreflight(next);
-      setPreflightCollapsed(false);
+      setPreflightCollapsed(
+        !next.items.some(
+          (item) => item.resolution === 'confirmation_required',
+        ),
+      );
       setSelected(
         new Set(
           next.items
@@ -746,12 +800,20 @@ function App() {
             <div>
               <h2 className='mb-2 text-[22px] font-bold'>
                 {preflight
-                  ? 'Review evidence, then tailor'
+                  ? preflight.items.some(
+                      (item) => item.resolution === 'confirmation_required',
+                    )
+                    ? 'Review the remaining questions, then tailor'
+                    : 'Evidence resolved — ready to tailor'
                   : 'Analyze job requirements'}
               </h2>
               <p className='mt-0 mb-0'>
                 {preflight
-                  ? 'Choose the relevant terms you can support before generating.'
+                  ? preflight.items.some(
+                      (item) => item.resolution === 'confirmation_required',
+                    )
+                    ? 'Only important claims not found in your resume or saved evidence need confirmation.'
+                    : 'Supported evidence was reused automatically; weaker unsupported signals were omitted.'
                   : 'Analyze ATS signals before deciding what belongs in this application.'}
               </p>
             </div>
@@ -858,12 +920,20 @@ function App() {
         </>
       )}
       {bank && bank.entries.length > 0 && (
-        <section className={compactPanelClass}>
-          <p className={eyebrowClass}>SAVED EVIDENCE</p>
-          <h2 className='mb-2 text-[22px] font-bold'>
-            Your local capability bank
-          </h2>
-          <div className='flex flex-wrap gap-2'>
+        <details className={compactPanelClass}>
+          <summary className='cursor-pointer list-none [&::-webkit-details-marker]:hidden'>
+            <span className='flex items-center justify-between gap-4'>
+              <span>
+                <span className={`${eyebrowClass} block`}>SAVED EVIDENCE</span>
+                <strong className='text-[22px]'>Your local capability bank</strong>
+                <small className='mt-1 block text-xs font-normal text-[#627067]'>
+                  {bank.entries.length} saved capabilities · collapsed by default
+                </small>
+              </span>
+              <span className='text-sm font-bold text-[#176a46]'>Show</span>
+            </span>
+          </summary>
+          <div className='mt-5 flex flex-wrap gap-2 border-t border-[#e7ebe7] pt-5'>
             {bank.entries.map((entry) => (
               <span
                 className='inline-flex items-center gap-[7px] rounded-full border border-[#d7e4d9] bg-[#eef4ef] py-[5px] pr-[7px] pl-2.5 text-[13px]'
@@ -880,7 +950,7 @@ function App() {
               </span>
             ))}
           </div>
-        </section>
+        </details>
       )}
       {error && (
         <p className='mt-4 mb-0 rounded-lg bg-[#fff3eb] px-3 py-2.5 text-[#9e411e]'>
