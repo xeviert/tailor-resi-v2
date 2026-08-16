@@ -18,11 +18,13 @@ tauri-build = { version = "2", features = [] }
 
 [dependencies]
 axum = "0.7"
+atomicwrites = "0.4"
 dotenvy = "0.15"
 lopdf = "0.36"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+sha2 = "0.10"
 tauri = { version = "2", features = [] }
 tauri-plugin-dialog = "2"
 tauri-plugin-fs = "2"

@@ -14,3 +14,4 @@ data/job-captures/*
 !data/job-captures/2026-08-14T1233442035470Z-job.json
 !data/job-captures/latest.json
 data/tailoring-results/
+data/api-usage/

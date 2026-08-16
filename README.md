@@ -6,6 +6,7 @@ Resume Workbench is a local resume-tailoring workspace with three main pieces:
 - `browser-extension/`: browser extension that captures job-post data from supported job boards.
 - `resume/`: locked DOCX resume templates, editable JSON resume content, render scripts, generated documents, and archived variants.
 - `data/job-captures/`: runtime job-post capture payloads, including `latest.json`.
+- `data/tailoring-results/`: versioned terminal outcomes used to restore the latest analysis summary after missed events or an app restart.
 
 ## Current Flow
 
@@ -13,12 +14,19 @@ Resume Workbench is a local resume-tailoring workspace with three main pieces:
 2. The Tauri bridge receives and normalizes the job data.
 3. The desktop UI shows the normalized job details and waits for your chosen action.
 4. The UI runs AI analysis, truthful tailoring, DOCX validation, and a one-page PDF export.
-5. Each tailored variant is archived, while `resume/generated/Xevier_T_CV_en.pdf` or `Xevier_T_CV_fr.pdf` is replaced as the ready-to-upload local file.
+5. Every analysis or tailoring attempt persists a visible summary outcome, including honest failure details when no AI analysis was produced.
+6. Each tailored variant is archived, and every successfully published artifact gets a provenance manifest. The exact validated variant is atomically published to the stable `Downloads/Xevier_T_CV_<lang>.pdf` filename; if PDF export fails, its validated DOCX is published instead. Only one of those two employer-facing files is kept per language.
 
 The browser extension sends captures to `/captures`; this is deliberately separate
 from the legacy `/analyze` endpoint, which remains available for integrations that
 expect its automatic behavior. Uploading to third-party job forms remains a manual
 browser step: use the desktop app's Open PDF/Open folder actions to select the stable file.
+The `/health` response includes `result_protocol_version`; a mismatch tells the user to
+fully restart the desktop app instead of silently running an incompatible UI/backend pair.
+
+Successful OpenAI calls also write usage-only receipts under `data/api-usage/` so future
+token and cost investigations can be tied to the analysis or tailoring stage without
+persisting API keys or prompt contents.
 
 ## Desktop UI and Linux
 

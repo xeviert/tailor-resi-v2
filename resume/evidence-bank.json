@@ -363,7 +363,7 @@
     },
     {
       "term": "Kanban",
-      "kind": "technology",
+      "kind": "method_domain",
       "user_attested": true
     },
     {
@@ -683,7 +683,7 @@
     },
     {
       "term": "Observability",
-      "kind": "technology",
+      "kind": "method_domain",
       "user_attested": true
     },
     {
@@ -853,7 +853,7 @@
     },
     {
       "term": "Technical leadership",
-      "kind": "technology",
+      "kind": "responsibility",
       "user_attested": true
     },
     {
@@ -878,6 +878,502 @@
     },
     {
       "term": "Vue.js",
+      "kind": "technology",
+      "user_attested": true
+    },
+    {
+      "term": "5+ years backend experience",
+      "kind": "technology",
+      "user_attested": true
+    },
+    {
+      "term": "AI and automation",
+      "kind": "technology",
+      "user_attested": true
+    },
+    {
+      "term": "AI-assisted automation",
+      "kind": "responsibility",
+      "user_attested": true
+    },
+    {
+      "term": "Backend service ownership",
+      "kind": "method_domain",
+      "user_attested": true
+    },
+    {
+      "term": "Comparable backend language",
+      "kind": "technology",
+      "user_attested": true
+    },
+    {
+      "term": "Complex codebase debugging",
+      "kind": "technology",
+      "user_attested": true
+    },
+    {
+      "term": "Continuous improvement and agility",
+      "kind": "technology",
+      "user_attested": true
+    },
+    {
+      "term": "Data pipelines",
+      "kind": "method_domain",
+      "user_attested": true
+    },
+    {
+      "term": "Order and commission pipelines",
+      "kind": "responsibility",
+      "user_attested": true
+    },
+    {
+      "term": "Production services at scale",
+      "kind": "technology",
+      "user_attested": true
+    },
+    {
+      "term": "Reliable data pipelines",
+      "kind": "technology",
+      "user_attested": true
+    },
+    {
+      "term": "Third-party API integrations",
+      "kind": "method_domain",
+      "user_attested": true
+    },
+    {
+      "term": "AI tooling",
+      "kind": "technology",
+      "user_attested": true
+    },
+    {
+      "term": "LLM-powered features",
+      "kind": "technology",
+      "user_attested": true
+    },
+    {
+      "term": "Own backend services",
+      "kind": "responsibility",
+      "user_attested": true
+    },
+    {
+      "term": "Sentry",
+      "kind": "technology",
+      "user_attested": true
+    },
+    {
+      "term": "Architecture logicielle",
+      "kind": "method_domain",
+      "user_attested": true
+    },
+    {
+      "term": "Bases de données relationnelles",
+      "kind": "technology",
+      "user_attested": true
+    },
+    {
+      "term": "Développement back-end",
+      "kind": "technology",
+      "user_attested": true
+    },
+    {
+      "term": "Développement front-end",
+      "kind": "technology",
+      "user_attested": true
+    },
+    {
+      "term": "Développement fullstack",
+      "kind": "technology",
+      "user_attested": true
+    },
+    {
+      "term": "Principes de développement API",
+      "kind": "technology",
+      "user_attested": true
+    },
+    {
+      "term": "Tests automatisés",
+      "kind": "technology",
+      "user_attested": true
+    },
+    {
+      "term": "SQL",
+      "kind": "technology",
+      "user_attested": true
+    },
+    {
+      "term": "Testing Library",
+      "kind": "technology",
+      "user_attested": true
+    },
+    {
+      "term": "Anglais courant",
+      "kind": "technology",
+      "user_attested": true
+    },
+    {
+      "term": "Cycle de vie logiciel",
+      "kind": "method_domain",
+      "user_attested": true
+    },
+    {
+      "term": "Exécution des tests",
+      "kind": "responsibility",
+      "user_attested": true
+    },
+    {
+      "term": "Implémentation logicielle",
+      "kind": "responsibility",
+      "user_attested": true
+    },
+    {
+      "term": "Intégration logiciel",
+      "kind": "responsibility",
+      "user_attested": true
+    },
+    {
+      "term": "Investigation d’anomalies",
+      "kind": "responsibility",
+      "user_attested": true
+    },
+    {
+      "term": "Outils de qualité logicielle",
+      "kind": "technology",
+      "user_attested": true
+    },
+    {
+      "term": "Rédaction de spécifications",
+      "kind": "responsibility",
+      "user_attested": true
+    },
+    {
+      "term": "Spécification des tests",
+      "kind": "responsibility",
+      "user_attested": true
+    },
+    {
+      "term": "Trois ans d’expérience",
+      "kind": "technology",
+      "user_attested": true
+    },
+    {
+      "term": "Linux",
+      "kind": "technology",
+      "user_attested": true
+    },
+    {
+      "term": "3+ ans développement applicatif",
+      "kind": "technology",
+      "user_attested": true
+    },
+    {
+      "term": "Conception de produits from scratch",
+      "kind": "technology",
+      "user_attested": true
+    },
+    {
+      "term": "Décisions d’architecture",
+      "kind": "technology",
+      "user_attested": true
+    },
+    {
+      "term": "Développement from scratch",
+      "kind": "method_domain",
+      "user_attested": true
+    },
+    {
+      "term": "Livraison pragmatique",
+      "kind": "technology",
+      "user_attested": true
+    },
+    {
+      "term": "Qualité du code",
+      "kind": "technology",
+      "user_attested": true
+    },
+    {
+      "term": "Bug resolution",
+      "kind": "technology",
+      "user_attested": true
+    },
+    {
+      "term": "Containerized deployments",
+      "kind": "method_domain",
+      "user_attested": true
+    },
+    {
+      "term": "Design patterns",
+      "kind": "responsibility",
+      "user_attested": true
+    },
+    {
+      "term": "Feature development",
+      "kind": "technology",
+      "user_attested": true
+    },
+    {
+      "term": "Highly interactive UI design",
+      "kind": "technology",
+      "user_attested": true
+    },
+    {
+      "term": "Performance optimization",
+      "kind": "responsibility",
+      "user_attested": true
+    },
+    {
+      "term": "Postgres",
+      "kind": "technology",
+      "user_attested": true
+    },
+    {
+      "term": "Requirements understanding",
+      "kind": "technology",
+      "user_attested": true
+    },
+    {
+      "term": "Technical risk management",
+      "kind": "technology",
+      "user_attested": true
+    },
+    {
+      "term": "Test automation",
+      "kind": "technology",
+      "user_attested": true
+    },
+    {
+      "term": "Troubleshooting",
+      "kind": "technology",
+      "user_attested": true
+    },
+    {
+      "term": "high-volume web applications",
+      "kind": "method_domain",
+      "user_attested": true
+    },
+    {
+      "term": "GCP",
+      "kind": "technology",
+      "user_attested": true
+    },
+    {
+      "term": "Own code from design through delivery",
+      "kind": "responsibility",
+      "user_attested": true
+    },
+    {
+      "term": "Serve as a functional lead or technical owner",
+      "kind": "responsibility",
+      "user_attested": true
+    },
+    {
+      "term": "Accessible interface design",
+      "kind": "technology",
+      "user_attested": true
+    },
+    {
+      "term": "Agile delivery",
+      "kind": "method_domain",
+      "user_attested": true
+    },
+    {
+      "term": "CI/CD pipelines",
+      "kind": "technology",
+      "user_attested": true
+    },
+    {
+      "term": "Code review facilitation combined with mentoring and knowledge sharing",
+      "kind": "technology",
+      "user_attested": true
+    },
+    {
+      "term": "End-to-end subject ownership",
+      "kind": "method_domain",
+      "user_attested": true
+    },
+    {
+      "term": "Git workflows",
+      "kind": "technology",
+      "user_attested": true
+    },
+    {
+      "term": "Performant interface design",
+      "kind": "technology",
+      "user_attested": true
+    },
+    {
+      "term": "REST API best practices",
+      "kind": "technology",
+      "user_attested": true
+    },
+    {
+      "term": "Secure scalable design",
+      "kind": "responsibility",
+      "user_attested": true
+    },
+    {
+      "term": "Azure",
+      "kind": "technology",
+      "user_attested": true
+    },
+    {
+      "term": "Azure/GCP",
+      "kind": "technology",
+      "user_attested": true
+    },
+    {
+      "term": "Deploy software features",
+      "kind": "responsibility",
+      "user_attested": true
+    },
+    {
+      "term": "HTML5",
+      "kind": "technology",
+      "user_attested": true
+    },
+    {
+      "term": "Vite",
+      "kind": "technology",
+      "user_attested": true
+    },
+    {
+      "term": "7+ years",
+      "kind": "technology",
+      "proof_note": "Instead of 7+ say many years",
+      "user_attested": true
+    },
+    {
+      "term": "API design practices do not claim without evidence beyond REST experience",
+      "kind": "technology",
+      "user_attested": true
+    },
+    {
+      "term": "Feature delivery",
+      "kind": "responsibility",
+      "user_attested": true
+    },
+    {
+      "term": "Front-end engineering",
+      "kind": "technology",
+      "user_attested": true
+    },
+    {
+      "term": "Next",
+      "kind": "technology",
+      "user_attested": true
+    },
+    {
+      "term": "REST API consumption",
+      "kind": "technology",
+      "user_attested": true
+    },
+    {
+      "term": "SEO",
+      "kind": "method_domain",
+      "user_attested": true
+    },
+    {
+      "term": "Security by design",
+      "kind": "responsibility",
+      "user_attested": true
+    },
+    {
+      "term": "User journeys",
+      "kind": "method_domain",
+      "user_attested": true
+    },
+    {
+      "term": "AWS / Azure / GCP",
+      "kind": "technology",
+      "user_attested": true
+    },
+    {
+      "term": "Mentor developers",
+      "kind": "responsibility",
+      "user_attested": true
+    },
+    {
+      "term": "English language",
+      "kind": "technology",
+      "user_attested": true
+    },
+    {
+      "term": "French language",
+      "kind": "technology",
+      "user_attested": true
+    },
+    {
+      "term": "Fullstack development",
+      "kind": "responsibility",
+      "user_attested": true
+    },
+    {
+      "term": "Independent work",
+      "kind": "technology",
+      "user_attested": true
+    },
+    {
+      "term": "MongoDB",
+      "kind": "technology",
+      "user_attested": true
+    },
+    {
+      "term": "Web application development",
+      "kind": "technology",
+      "user_attested": true
+    },
+    {
+      "term": "Lead technical standards",
+      "kind": "responsibility",
+      "user_attested": true
+    },
+    {
+      "term": "Notion",
+      "kind": "technology",
+      "user_attested": true
+    },
+    {
+      "term": "Slack",
+      "kind": "technology",
+      "user_attested": true
+    },
+    {
+      "term": "5 ans d’expérience en développement",
+      "kind": "technology",
+      "user_attested": true
+    },
+    {
+      "term": "Aisance avec PostgreSQL",
+      "kind": "technology",
+      "user_attested": true
+    },
+    {
+      "term": "Angular",
+      "kind": "technology",
+      "user_attested": true
+    },
+    {
+      "term": "Clean Code",
+      "kind": "method_domain",
+      "user_attested": true
+    },
+    {
+      "term": "Collaboration avec des profils variés",
+      "kind": "method_domain",
+      "user_attested": true
+    },
+    {
+      "term": "Domain-Driven Design",
+      "kind": "method_domain",
+      "user_attested": true
+    },
+    {
+      "term": "Pair programming",
+      "kind": "technology",
+      "user_attested": true
+    },
+    {
+      "term": "Solide maîtrise de NodeJS / TypeScript",
       "kind": "technology",
       "user_attested": true
     }

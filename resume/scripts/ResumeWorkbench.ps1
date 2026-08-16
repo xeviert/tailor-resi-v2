@@ -464,13 +464,52 @@ function Render-Resume([string]$LangCode, [string]$ContentPath, [string]$OutPath
   }
 }
 
-function Validate-Resume([string]$LangCode, [string]$DocxPath) {
+function Get-TaggedEditableValues([string]$DocxPath) {
+  $tmp = Join-Path ([System.IO.Path]::GetTempPath()) ("resume_validate_" + [guid]::NewGuid())
+  Expand-Docx $DocxPath $tmp
+  try {
+    $xml = Load-Xml (Join-Path $tmp 'word\document.xml')
+    $values = @{}
+    foreach ($sdt in $xml.GetElementsByTagName('sdt', $WNs)) {
+      $tagNode = $null
+      foreach ($candidate in $sdt.GetElementsByTagName('tag', $WNs)) { $tagNode = $candidate; break }
+      if ($null -eq $tagNode) { continue }
+      $tag = $tagNode.GetAttribute('val', $WNs)
+      if ($tag -notmatch '^experience\.\d+\.bullets\.\d+$' -and $tag -notmatch '^skills\.') { continue }
+      $text = New-Object System.Text.StringBuilder
+      foreach ($node in $sdt.GetElementsByTagName('t', $WNs)) { [void]$text.Append($node.InnerText) }
+      $values[$tag] = $text.ToString()
+    }
+    return $values
+  } finally {
+    if (Test-Path $tmp) { Remove-Item -LiteralPath $tmp -Recurse -Force }
+  }
+}
+
+function Validate-Resume([string]$LangCode, [string]$DocxPath, [string]$ContentPath) {
   $expected = Get-Content -Raw -Encoding UTF8 (Join-Path $ContentDir "locked.$LangCode.json") | ConvertFrom-Json
   $actual = Get-LockedSnapshot $LangCode $DocxPath
   $expectedJson = $expected | ConvertTo-Json -Depth 8 -Compress
   $actualJson = $actual | ConvertTo-Json -Depth 8 -Compress
   if ($expectedJson -ne $actualJson) { throw "Locked header, section heading, or education text changed." }
   Write-Host "[validate] locked sections unchanged for $LangCode"
+
+  if ($ContentPath) {
+    $contentData = Get-Content -Raw -Encoding UTF8 $ContentPath | ConvertFrom-Json
+    $expectedEditable = Flatten-Content $contentData
+    $actualEditable = Get-TaggedEditableValues $DocxPath
+    $checked = 0
+    foreach ($tag in @($expectedEditable.Keys | Sort-Object)) {
+      if ($tag -notmatch '^experience\.\d+\.bullets\.\d+$' -and $tag -notmatch '^skills\.') { continue }
+      if (!$actualEditable.ContainsKey($tag)) { throw "Rendered DOCX is missing editable field: $tag" }
+      if ([string]$expectedEditable[$tag] -cne [string]$actualEditable[$tag]) {
+        throw "Rendered DOCX content does not match variant JSON for: $tag"
+      }
+      $checked++
+    }
+    if ($checked -eq 0) { throw 'Variant JSON did not contain editable resume fields.' }
+    Write-Host "[validate] $checked editable fields match $ContentPath"
+  }
 }
 
 function Archive-Variant([string]$LangCode, [string]$VariantPath, [string]$CompanyName, [string]$RoleName) {
@@ -565,7 +604,7 @@ switch ($Command) {
   }
   'validate' {
     if (!$Lang -or !$Docx) { throw '-Lang and -Docx are required for validate' }
-    Validate-Resume $Lang $Docx
+    Validate-Resume $Lang $Docx $Content
   }
   'fit' {
     if (!$Docx) { throw '-Docx is required for fit' }

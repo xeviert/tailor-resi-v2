@@ -47,7 +47,10 @@ mod tests {
     #[test]
     fn development_env_is_at_the_repository_root() {
         let path = development_env_path();
-        assert_eq!(path.file_name().and_then(|name| name.to_str()), Some(".env"));
+        assert_eq!(
+            path.file_name().and_then(|name| name.to_str()),
+            Some(".env")
+        );
         assert!(path.parent().unwrap().join("src-tauri").is_dir());
     }
 

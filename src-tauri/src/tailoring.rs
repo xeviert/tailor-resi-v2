@@ -1,10 +1,21 @@
-use crate::{analysis::JobAnalysis, evidence::EvidenceEntry};
+use crate::{
+    analysis::JobAnalysis,
+    api_usage::record_response_usage,
+    evidence::{
+        equivalent_terms, placement_equivalent_terms, placement_term_is_covered, EvidenceEntry,
+    },
+};
+use atomicwrites::{AllowOverwrite, AtomicFile};
 use reqwest::StatusCode;
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::{
     collections::{BTreeMap, BTreeSet},
+    fs::File,
+    io::Read,
     path::{Path, PathBuf},
     process::Command,
+    sync::{Mutex, OnceLock},
 };
 
 const MAX_COMPANY_ROLE_SLUG_LEN: usize = 64;
@@ -104,6 +115,13 @@ pub struct ContentChange {
     pub path: String,
     pub before: String,
     pub after: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct RetailorMetadata {
+    pub source_variant_slug: String,
+    pub source_ats_score: u8,
+    pub selected_terms: Vec<String>,
 }
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq, Serialize)]
@@ -235,6 +253,8 @@ pub struct TailorRequest {
     #[serde(default)]
     pub approved_evidence: Vec<EvidenceEntry>,
     #[serde(default)]
+    pub priority_attested_terms: Vec<String>,
+    #[serde(default)]
     pub bullet_keyword_emphasis: BulletKeywordEmphasis,
 }
 
@@ -263,7 +283,37 @@ pub struct TailorResponse {
     pub report: Option<TailoringReport>,
     pub tailored_content: Option<serde_json::Value>,
     pub content_changes: Vec<ContentChange>,
+    pub artifact: Option<ArtifactProvenance>,
+    pub retailor: Option<RetailorMetadata>,
     pub error: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+pub struct ArtifactProvenance {
+    pub variant_slug: String,
+    pub format: String,
+    pub source_path: String,
+    pub downloads_path: String,
+    pub sha256: String,
+    pub manifest_path: String,
+    pub verification_status: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+struct ArtifactManifest {
+    schema_version: u8,
+    variant_slug: String,
+    language: String,
+    selected_format: String,
+    variant_json_path: String,
+    docx_path: String,
+    docx_sha256: String,
+    pdf_path: Option<String>,
+    pdf_sha256: Option<String>,
+    downloads_path: String,
+    downloads_sha256: String,
+    validation_status: String,
+    fit_status: String,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -307,6 +357,7 @@ pub fn build_tailoring_prompt(
     analysis: &JobAnalysis,
     base_resume: &serde_json::Value,
     approved_evidence: &[EvidenceEntry],
+    priority_attested_terms: &[String],
     bullet_keyword_emphasis: BulletKeywordEmphasis,
     concise: bool,
     correction_instruction: Option<&str>,
@@ -314,15 +365,29 @@ pub fn build_tailoring_prompt(
     let parsed_job = serde_json::to_string(parsed_job).unwrap_or_else(|_| "{}".to_string());
     let analysis = serde_json::to_string(analysis).unwrap_or_else(|_| "{}".to_string());
     let base_resume = serde_json::to_string(base_resume).unwrap_or_else(|_| "{}".to_string());
+    let placement_terms = priority_attested_terms.to_vec();
     let approved_evidence =
         serde_json::to_string(approved_evidence).unwrap_or_else(|_| "[]".to_string());
+    let has_model_placement_terms = !placement_terms.is_empty();
 
     let concise_instruction = if concise {
-        "The preceding attempt overflowed to a second page. Keep every bullet and every factual claim, but rewrite the editable text more compactly: remove repetition, use concise verbs, and prefer compact ATS terminology. Do not shorten by deleting responsibilities or achievements.\n\n"
+        if has_model_placement_terms {
+            "The preceding attempt overflowed to a second page. Keep the same bullet count and preserve every selected claim placement, but rewrite the editable text more compactly. Base claims intentionally displaced by selected user-attested claims may remain displaced; preserve the other factual claims. Remove repetition, use concise verbs, and prefer compact ATS terminology.\n\n"
+        } else {
+            "The preceding attempt overflowed to a second page. Keep every bullet and every factual claim, but rewrite the editable text more compactly: remove repetition, use concise verbs, and prefer compact ATS terminology. Do not shorten by deleting responsibilities or achievements.\n\n"
+        }
     } else {
         ""
     };
     let correction_instruction = correction_instruction.unwrap_or("");
+    let placement_instruction = if has_model_placement_terms {
+        format!(
+            "The user explicitly attested the following claims and authorized you to place them in the most plausible existing role: {}. You MUST incorporate every selected claim naturally in one or more experience bullets. You may completely replace the least job-relevant existing bullet claims to make room, while keeping the same jobs and bullet counts. Multiple selected claims may share a bullet when natural. The attestation supports only the named claims; do not invent adjacent details, metrics, employers, dates, credentials, or responsibilities.\n",
+            placement_terms.join(", ")
+        )
+    } else {
+        String::new()
+    };
 
     format!(
         "Tailor this {language} resume JSON for maximum truthful ATS alignment.\n\
@@ -331,7 +396,8 @@ pub fn build_tailoring_prompt(
          Do not change meta, company names, locations, titles, dates, job order, number of jobs, number of bullets, or skill keys.\n\
          Aggressively incorporate ATS keywords, tools, responsibility phrases, and domain wording when the base resume supports them.\n\
          {bullet_emphasis_instruction}\
-         User-attested evidence may support a skills string. Use it in an experience bullet only when its proof_note explicitly names a matching role or project; never infer a responsibility from a term alone.\n\
+         {placement_instruction}\
+         User-attested evidence may support a skills string. Use it in an experience bullet only when its proof_note explicitly names a matching role or project or allow_model_role_placement is true; never infer a responsibility from any other term alone.\n\
          Do not invent credentials, employers, tools, metrics, responsibilities, education, certifications, or experience.\n\
          Put important job keywords without base-resume or user-attested evidence into omitted_unsupported_keywords instead of adding them to the resume.\n\
          Keep each rewritten bullet close to the original length so the locked DOCX layout remains stable.\n\n\
@@ -341,7 +407,7 @@ pub fn build_tailoring_prompt(
          ATS analysis JSON:\n{analysis}\n\n\
          Base resume JSON:\n{base_resume}\n\n\
          User-attested evidence bank entries:\n{approved_evidence}",
-        bullet_emphasis_instruction = bullet_keyword_emphasis.prompt_instruction(),
+         bullet_emphasis_instruction = bullet_keyword_emphasis.prompt_instruction(),
     )
 }
 
@@ -444,6 +510,7 @@ pub fn build_tailoring_request(
     analysis: &JobAnalysis,
     base_resume: &serde_json::Value,
     approved_evidence: &[EvidenceEntry],
+    priority_attested_terms: &[String],
     bullet_keyword_emphasis: BulletKeywordEmphasis,
     concise: bool,
     correction_instruction: Option<&str>,
@@ -457,7 +524,7 @@ pub fn build_tailoring_request(
             },
             {
                 "role": "user",
-                "content": build_tailoring_prompt(language, parsed_job, analysis, base_resume, approved_evidence, bullet_keyword_emphasis, concise, correction_instruction)
+                "content": build_tailoring_prompt(language, parsed_job, analysis, base_resume, approved_evidence, priority_attested_terms, bullet_keyword_emphasis, concise, correction_instruction)
             }
         ],
         "text": {
@@ -478,6 +545,7 @@ pub async fn tailor_resume(
     analysis: &JobAnalysis,
     base_resume: &serde_json::Value,
     approved_evidence: &[EvidenceEntry],
+    priority_attested_terms: &[String],
     bullet_keyword_emphasis: BulletKeywordEmphasis,
     concise: bool,
     correction_instruction: Option<&str>,
@@ -491,6 +559,7 @@ pub async fn tailor_resume(
         analysis,
         base_resume,
         approved_evidence,
+        priority_attested_terms,
         bullet_keyword_emphasis,
         concise,
         correction_instruction,
@@ -515,7 +584,9 @@ pub async fn tailor_resume(
         return Err(TailoringError::Http { status, body });
     }
 
-    parse_tailored_resume_from_response(&body)
+    let tailored = parse_tailored_resume_from_response(&body)?;
+    record_response_usage("resume_tailoring", &config.model, &body);
+    Ok(tailored)
 }
 
 pub fn parse_tailored_resume_from_response(body: &str) -> Result<TailoredResume, TailoringError> {
@@ -720,6 +791,40 @@ fn count_changed_experience_bullets(base: &serde_json::Value, tailored: &serde_j
         })
         .filter(|(base_bullet, tailored_bullet)| base_bullet != tailored_bullet)
         .count() as u32
+}
+
+fn missing_model_placement_terms(
+    tailored: &serde_json::Value,
+    required_terms: &[String],
+) -> Vec<String> {
+    let experience_text = tailored["experience"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .flat_map(|job| job["bullets"].as_array().into_iter().flatten())
+        .filter_map(serde_json::Value::as_str)
+        .collect::<Vec<_>>()
+        .join(" ");
+    required_terms
+        .iter()
+        .filter(|term| !placement_term_is_covered(&experience_text, term))
+        .cloned()
+        .collect()
+}
+
+fn reconcile_model_placement_report(report: &mut TailoringReport, selected_terms: &[String]) {
+    report.omitted_unsupported_keywords.retain(|omitted| {
+        !selected_terms.iter().any(|selected| {
+            equivalent_terms(omitted, selected) || placement_equivalent_terms(omitted, selected)
+        })
+    });
+    for selected in selected_terms {
+        if !report.covered_keywords.iter().any(|covered| {
+            equivalent_terms(covered, selected) || placement_equivalent_terms(covered, selected)
+        }) {
+            report.covered_keywords.push(selected.clone());
+        }
+    }
 }
 
 pub(crate) fn content_changes(
@@ -972,6 +1077,7 @@ fn render_resume(
 fn validate_rendered_resume(
     root: &Path,
     language: &str,
+    variant_json_path: &Path,
     docx_path: &Path,
 ) -> Result<(), TailoringError> {
     let script = root
@@ -986,6 +1092,8 @@ fn validate_rendered_resume(
         .arg(language)
         .arg("-Docx")
         .arg(docx_path)
+        .arg("-Content")
+        .arg(variant_json_path)
         .output()
         .map_err(|error| TailoringError::Validation(error.to_string()))?;
     if !validate.status.success() {
@@ -1042,22 +1150,6 @@ fn pdf_page_count(pdf_path: &Path) -> Result<u32, TailoringError> {
     Ok(document.get_pages().len() as u32)
 }
 
-fn publish_latest_docx(
-    root: &Path,
-    language: &str,
-    docx_path: &Path,
-) -> Result<PathBuf, TailoringError> {
-    let latest_docx_path = root
-        .join("resume")
-        .join("generated")
-        .join(format!("Xevier_T_CV_{language}.docx"));
-    std::fs::create_dir_all(latest_docx_path.parent().unwrap())
-        .map_err(|error| TailoringError::Io(error.to_string()))?;
-    std::fs::copy(docx_path, &latest_docx_path)
-        .map_err(|error| TailoringError::Io(error.to_string()))?;
-    Ok(latest_docx_path)
-}
-
 fn downloads_file_path(language: &str, extension: &str) -> Result<PathBuf, TailoringError> {
     validate_language(language)?;
     let home = std::env::var_os("USERPROFILE")
@@ -1072,23 +1164,227 @@ fn downloads_file_path(language: &str, extension: &str) -> Result<PathBuf, Tailo
         .join(format!("Xevier_T_CV_{language}.{extension}")))
 }
 
-fn publish_downloads_file(
-    source_path: &Path,
+fn downloads_file_path_in(
+    downloads_directory: Option<&Path>,
     language: &str,
     extension: &str,
 ) -> Result<PathBuf, TailoringError> {
-    let destination = downloads_file_path(language, extension)?;
+    match downloads_directory {
+        Some(directory) => {
+            validate_language(language)?;
+            Ok(directory.join(format!("Xevier_T_CV_{language}.{extension}")))
+        }
+        None => downloads_file_path(language, extension),
+    }
+}
+
+fn sha256_file(path: &Path) -> Result<String, TailoringError> {
+    let mut file = File::open(path).map_err(|error| TailoringError::Io(error.to_string()))?;
+    let mut hasher = Sha256::new();
+    let mut buffer = [0_u8; 64 * 1024];
+    loop {
+        let read = file
+            .read(&mut buffer)
+            .map_err(|error| TailoringError::Io(error.to_string()))?;
+        if read == 0 {
+            break;
+        }
+        hasher.update(&buffer[..read]);
+    }
+    Ok(format!("{:x}", hasher.finalize()))
+}
+
+fn atomic_copy(source_path: &Path, destination: &Path) -> Result<(), TailoringError> {
+    AtomicFile::new(destination, AllowOverwrite)
+        .write(|output| -> std::io::Result<()> {
+            let mut source = File::open(source_path)?;
+            std::io::copy(&mut source, output)?;
+            output.sync_all()
+        })
+        .map_err(|error| TailoringError::Io(error.to_string()))
+}
+
+static DOWNLOAD_PUBLICATION_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+
+#[allow(clippy::too_many_arguments)]
+fn publish_verified_artifact(
+    root: &Path,
+    variant_slug: &str,
+    source_path: &Path,
+    language: &str,
+    extension: &str,
+    variant_json_path: &Path,
+    docx_path: &Path,
+    pdf_path: Option<&Path>,
+    validation_status: &str,
+    fit_status: &str,
+    downloads_directory: Option<&Path>,
+) -> Result<ArtifactProvenance, TailoringError> {
+    if !matches!(extension, "pdf" | "docx") {
+        return Err(TailoringError::Io(format!(
+            "Unsupported resume artifact format: {extension}"
+        )));
+    }
+    if !source_path.is_file() {
+        return Err(TailoringError::Io(format!(
+            "Verified variant artifact does not exist: {}",
+            source_path.display()
+        )));
+    }
+
+    let _guard = DOWNLOAD_PUBLICATION_LOCK
+        .get_or_init(|| Mutex::new(()))
+        .lock()
+        .map_err(|_| TailoringError::Io("Downloads publication lock was poisoned.".to_string()))?;
+    let destination = downloads_file_path_in(downloads_directory, language, extension)?;
     std::fs::create_dir_all(destination.parent().expect("Downloads path has a parent"))
         .map_err(|error| TailoringError::Io(error.to_string()))?;
-    std::fs::copy(source_path, &destination)
-        .map_err(|error| TailoringError::Io(error.to_string()))?;
-    Ok(destination)
+
+    let source_sha256 = sha256_file(source_path)?;
+    atomic_copy(source_path, &destination)?;
+    let destination_sha256 = sha256_file(&destination)?;
+    if source_sha256 != destination_sha256 {
+        let _ = std::fs::remove_file(&destination);
+        return Err(TailoringError::Io(
+            "Downloads artifact hash did not match the selected variant; the copy was removed."
+                .to_string(),
+        ));
+    }
+
+    let counterpart_extension = if extension == "pdf" { "docx" } else { "pdf" };
+    let counterpart = downloads_file_path_in(downloads_directory, language, counterpart_extension)?;
+    if counterpart.is_file() {
+        if let Err(error) = std::fs::remove_file(&counterpart) {
+            let _ = std::fs::remove_file(&destination);
+            return Err(TailoringError::Io(format!(
+                "The verified {extension} was prepared, but the stale {counterpart_extension} could not be removed from Downloads: {error}"
+            )));
+        }
+    }
+
+    let docx_sha256 = sha256_file(docx_path)?;
+    let (manifest_pdf_path, pdf_sha256) = match pdf_path.filter(|path| path.is_file()) {
+        Some(path) => (Some(relative_path(root, path)), Some(sha256_file(path)?)),
+        None => (None, None),
+    };
+    let manifest_path = root
+        .join("resume")
+        .join("variants")
+        .join(variant_slug)
+        .join("artifact-manifest.json");
+    let manifest = ArtifactManifest {
+        schema_version: 1,
+        variant_slug: variant_slug.to_string(),
+        language: language.to_string(),
+        selected_format: extension.to_string(),
+        variant_json_path: relative_path(root, variant_json_path),
+        docx_path: relative_path(root, docx_path),
+        docx_sha256,
+        pdf_path: manifest_pdf_path,
+        pdf_sha256,
+        downloads_path: destination.to_string_lossy().to_string(),
+        downloads_sha256: destination_sha256.clone(),
+        validation_status: validation_status.to_string(),
+        fit_status: fit_status.to_string(),
+    };
+    if let Err(error) = write_json(&manifest_path, &manifest) {
+        let _ = std::fs::remove_file(&destination);
+        return Err(error);
+    }
+
+    Ok(ArtifactProvenance {
+        variant_slug: variant_slug.to_string(),
+        format: extension.to_string(),
+        source_path: relative_path(root, source_path),
+        downloads_path: destination.to_string_lossy().to_string(),
+        sha256: source_sha256,
+        manifest_path: relative_path(root, &manifest_path),
+        verification_status: "verified".to_string(),
+    })
+}
+
+pub fn publish_variant_artifact(
+    root: &Path,
+    variant_slug: &str,
+    format: &str,
+) -> Result<ArtifactProvenance, TailoringError> {
+    if variant_slug.is_empty()
+        || !variant_slug.chars().all(|character| {
+            character.is_ascii_lowercase() || character.is_ascii_digit() || character == '-'
+        })
+    {
+        return Err(TailoringError::Io(
+            "Variant identifier contains unsupported path characters.".to_string(),
+        ));
+    }
+    if !matches!(format, "pdf" | "docx") {
+        return Err(TailoringError::Io(format!(
+            "Unsupported resume artifact format: {format}"
+        )));
+    }
+
+    let variant_dir = root.join("resume").join("variants").join(variant_slug);
+    if !variant_dir.is_dir() {
+        return Err(TailoringError::Io(format!(
+            "Resume variant does not exist: {variant_slug}"
+        )));
+    }
+    let variant_json_path = variant_dir.join("variant.json");
+    let variant: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(&variant_json_path)
+            .map_err(|error| TailoringError::Io(error.to_string()))?,
+    )
+    .map_err(|error| TailoringError::InvalidJson(error.to_string()))?;
+    let language = variant["meta"]["language"]
+        .as_str()
+        .ok_or_else(|| TailoringError::InvalidJson("Variant language is missing.".to_string()))?;
+    validate_language(language)?;
+    let docx_path = variant_dir.join(format!("Xevier_T_CV_{language}.docx"));
+    validate_rendered_resume(root, language, &variant_json_path, &docx_path)?;
+    let pdf_path = variant_dir.join(format!("Xevier_T_CV_{language}.pdf"));
+    let (source_path, fit_status, manifest_pdf_path) = if format == "pdf" {
+        if !pdf_path.is_file() {
+            return Err(TailoringError::Io(format!(
+                "The selected variant does not have a PDF: {variant_slug}"
+            )));
+        }
+        let pages = pdf_page_count(&pdf_path)?;
+        if pages != 1 {
+            return Err(TailoringError::Fit(format!(
+                "The selected variant PDF has {pages} pages; only a one-page PDF can be published."
+            )));
+        }
+        (&pdf_path, "passed", Some(pdf_path.as_path()))
+    } else {
+        (
+            &docx_path,
+            if pdf_path.is_file() {
+                "failed"
+            } else {
+                "not_run"
+            },
+            pdf_path.is_file().then_some(pdf_path.as_path()),
+        )
+    };
+
+    publish_verified_artifact(
+        root,
+        variant_slug,
+        source_path,
+        language,
+        format,
+        &variant_json_path,
+        &docx_path,
+        manifest_pdf_path,
+        "passed",
+        fit_status,
+        None,
+    )
 }
 
 #[allow(clippy::too_many_arguments)]
 fn partial_tailoring_response(
     root: &Path,
-    language: &str,
     variant_slug: String,
     variant_json_path: &Path,
     report_json_path: &Path,
@@ -1105,14 +1401,7 @@ fn partial_tailoring_response(
     publish_docx: bool,
     error: String,
 ) -> TailorResponse {
-    let (latest_docx_path, downloads_docx_error) = if publish_docx {
-        match publish_latest_docx(root, language, docx_path) {
-            Ok(latest_path) => (Some(relative_path(root, &latest_path)), None),
-            Err(publish_error) => (None, Some(publish_error.to_string())),
-        }
-    } else {
-        (None, None)
-    };
+    let latest_docx_path = publish_docx.then(|| relative_path(root, docx_path));
     TailorResponse {
         success: false,
         tailoring_status: "partial",
@@ -1123,7 +1412,7 @@ fn partial_tailoring_response(
         pdf_path: pdf_path.exists().then(|| relative_path(root, pdf_path)),
         latest_pdf_path: None,
         downloads_docx_path: None,
-        downloads_docx_error,
+        downloads_docx_error: None,
         downloads_pdf_path: None,
         downloads_error: None,
         docx_opened: false,
@@ -1137,20 +1426,40 @@ fn partial_tailoring_response(
         report: Some(report),
         tailored_content: Some(tailored_content),
         content_changes,
+        artifact: None,
+        retailor: None,
         error: Some(error),
     }
 }
 
-fn publish_partial_docx_to_downloads(
-    response: &mut TailorResponse,
-    root: &Path,
-    language: &str,
-) {
-    let Some(relative_latest_path) = response.latest_docx_path.as_deref() else {
+fn publish_partial_docx_to_downloads(response: &mut TailorResponse, root: &Path, language: &str) {
+    let (Some(relative_docx_path), Some(relative_variant_json_path), Some(variant_slug)) = (
+        response.docx_path.as_deref(),
+        response.variant_json_path.as_deref(),
+        response.variant_slug.as_deref(),
+    ) else {
         return;
     };
-    match publish_downloads_file(&root.join(relative_latest_path), language, "docx") {
-        Ok(path) => response.downloads_docx_path = Some(path.to_string_lossy().to_string()),
+    let docx_path = root.join(relative_docx_path);
+    let pdf_path = response.pdf_path.as_deref().map(|path| root.join(path));
+    match publish_verified_artifact(
+        root,
+        variant_slug,
+        &docx_path,
+        language,
+        "docx",
+        &root.join(relative_variant_json_path),
+        &docx_path,
+        pdf_path.as_deref(),
+        response.validation_status,
+        response.fit_status,
+        None,
+    ) {
+        Ok(artifact) => {
+            response.downloads_docx_path = Some(artifact.downloads_path.clone());
+            response.downloads_docx_error = None;
+            response.artifact = Some(artifact);
+        }
         Err(error) => response.downloads_docx_error = Some(error.to_string()),
     }
 }
@@ -1213,6 +1522,7 @@ pub async fn tailor_and_render_with_progress(
     let mut page_counts = Vec::new();
     let mut needs_concise_rewrite = false;
     let mut correction_instruction: Option<String> = None;
+    let required_placement_terms = request.priority_attested_terms.clone();
     for attempt_index in 0..MAX_TAILORING_ATTEMPTS {
         let attempt = attempt_index + 1;
         progress(
@@ -1220,7 +1530,7 @@ pub async fn tailor_and_render_with_progress(
             "resume_tailoring",
             "started",
             if correction_instruction.is_some() {
-                "AI is correcting missing required experience-bullet rewrites."
+                "AI is correcting required experience-bullet content."
             } else if needs_concise_rewrite {
                 "AI is making the resume more concise for a one-page fit."
             } else {
@@ -1235,6 +1545,7 @@ pub async fn tailor_and_render_with_progress(
             &request.analysis,
             &base_resume,
             &request.approved_evidence,
+            &request.priority_attested_terms,
             request.bullet_keyword_emphasis,
             needs_concise_rewrite,
             correction_instruction.as_deref(),
@@ -1308,6 +1619,37 @@ pub async fn tailor_and_render_with_progress(
                 return Err(final_error);
             }
         }
+        let missing_placement_terms =
+            missing_model_placement_terms(&tailored.content, &required_placement_terms);
+        if !missing_placement_terms.is_empty() {
+            if attempt < MAX_TAILORING_ATTEMPTS {
+                correction_instruction = Some(format!(
+                    "Your preceding response omitted user-attested claims that must appear naturally in experience bullets: {}. Place every missing claim in the most plausible existing role, replacing lower-value bullet claims if needed. Keep the same job and bullet counts and do not add facts beyond the selected claims.\n\n",
+                    missing_placement_terms.join(", ")
+                ));
+                progress(
+                    reporter,
+                    "safety_validation",
+                    "retrying",
+                    "Selected claims were missing from experience bullets; requesting a corrected response.",
+                    Some(attempt),
+                );
+                continue;
+            }
+            let final_error = invalid_message(&format!(
+                "selected claims could not be placed in experience bullets after {MAX_TAILORING_ATTEMPTS} attempts: {}",
+                missing_placement_terms.join(", ")
+            ));
+            progress(
+                reporter,
+                "safety_validation",
+                "failed",
+                final_error.to_string(),
+                Some(attempt),
+            );
+            return Err(final_error);
+        }
+        reconcile_model_placement_report(&mut tailored.report, &required_placement_terms);
         correction_instruction = None;
         let experience_bullets_changed =
             count_changed_experience_bullets(&base_resume, &tailored.content);
@@ -1373,7 +1715,6 @@ pub async fn tailor_and_render_with_progress(
             );
             return Ok(partial_tailoring_response(
                 &root,
-                language,
                 variant_slug,
                 &variant_json_path,
                 &report_json_path,
@@ -1406,7 +1747,9 @@ pub async fn tailor_and_render_with_progress(
             "Validating locked resume sections.",
             Some(attempt),
         );
-        if let Err(error) = validate_rendered_resume(&root, language, &docx_path) {
+        if let Err(error) =
+            validate_rendered_resume(&root, language, &variant_json_path, &docx_path)
+        {
             progress(
                 reporter,
                 "locked_validation",
@@ -1416,7 +1759,6 @@ pub async fn tailor_and_render_with_progress(
             );
             return Ok(partial_tailoring_response(
                 &root,
-                language,
                 variant_slug,
                 &variant_json_path,
                 &report_json_path,
@@ -1451,68 +1793,6 @@ pub async fn tailor_and_render_with_progress(
         );
         match check_one_page_fit(&root, &docx_path, &pdf_path) {
             Ok(page_count) => {
-                let latest_pdf_path = root
-                    .join("resume")
-                    .join("generated")
-                    .join(format!("Xevier_T_CV_{language}.pdf"));
-                if let Err(error) = std::fs::create_dir_all(latest_pdf_path.parent().unwrap()) {
-                    let error = TailoringError::Io(error.to_string());
-                    progress(
-                        reporter,
-                        "pdf_fit",
-                        "failed",
-                        error.to_string(),
-                        Some(attempt),
-                    );
-                    return Ok(partial_tailoring_response(
-                        &root,
-                        language,
-                        variant_slug,
-                        &variant_json_path,
-                        &report_json_path,
-                        &docx_path,
-                        &pdf_path,
-                        Some(page_count),
-                        request.bullet_keyword_emphasis,
-                        experience_bullets_changed,
-                        tailored.content,
-                        changes,
-                        tailored.report,
-                        "passed",
-                        "passed",
-                        true,
-                        error.to_string(),
-                    ));
-                }
-                if let Err(error) = std::fs::copy(&pdf_path, &latest_pdf_path) {
-                    let error = TailoringError::Io(error.to_string());
-                    progress(
-                        reporter,
-                        "pdf_fit",
-                        "failed",
-                        error.to_string(),
-                        Some(attempt),
-                    );
-                    return Ok(partial_tailoring_response(
-                        &root,
-                        language,
-                        variant_slug,
-                        &variant_json_path,
-                        &report_json_path,
-                        &docx_path,
-                        &pdf_path,
-                        Some(page_count),
-                        request.bullet_keyword_emphasis,
-                        experience_bullets_changed,
-                        tailored.content,
-                        changes,
-                        tailored.report,
-                        "passed",
-                        "passed",
-                        true,
-                        error.to_string(),
-                    ));
-                }
                 progress(
                     reporter,
                     "pdf_fit",
@@ -1520,12 +1800,26 @@ pub async fn tailor_and_render_with_progress(
                     "PDF exported and confirmed at one page.",
                     Some(attempt),
                 );
-                let (downloads_pdf_path, downloads_error) =
-                    match publish_downloads_file(&latest_pdf_path, language, "pdf") {
-                        Ok(path) => (Some(path.to_string_lossy().to_string()), None),
+                let (downloads_pdf_path, downloads_error, artifact) =
+                    match publish_verified_artifact(
+                        &root,
+                        &variant_slug,
+                        &pdf_path,
+                        language,
+                        "pdf",
+                        &variant_json_path,
+                        &docx_path,
+                        Some(&pdf_path),
+                        "passed",
+                        "passed",
+                        None,
+                    ) {
+                        Ok(artifact) => {
+                            (Some(artifact.downloads_path.clone()), None, Some(artifact))
+                        }
                         Err(error) => {
                             eprintln!("[downloads] Failed to publish PDF: {error}");
-                            (None, Some(error.to_string()))
+                            (None, Some(error.to_string()), None)
                         }
                     };
                 progress(
@@ -1543,7 +1837,7 @@ pub async fn tailor_and_render_with_progress(
                     docx_path: Some(relative_path(&root, &docx_path)),
                     latest_docx_path: None,
                     pdf_path: Some(relative_path(&root, &pdf_path)),
-                    latest_pdf_path: Some(relative_path(&root, &latest_pdf_path)),
+                    latest_pdf_path: Some(relative_path(&root, &pdf_path)),
                     downloads_docx_path: None,
                     downloads_docx_error: None,
                     downloads_pdf_path,
@@ -1559,6 +1853,8 @@ pub async fn tailor_and_render_with_progress(
                     report: Some(tailored.report),
                     tailored_content: Some(tailored.content),
                     content_changes: changes,
+                    artifact,
+                    retailor: None,
                     error: None,
                 });
             }
@@ -1590,7 +1886,6 @@ pub async fn tailor_and_render_with_progress(
                     );
                     let mut response = partial_tailoring_response(
                         &root,
-                        language,
                         variant_slug,
                         &variant_json_path,
                         &report_json_path,
@@ -1628,7 +1923,6 @@ pub async fn tailor_and_render_with_progress(
                 );
                 let mut response = partial_tailoring_response(
                     &root,
-                    language,
                     variant_slug,
                     &variant_json_path,
                     &report_json_path,
@@ -1685,6 +1979,8 @@ pub fn failed_response(error: String) -> TailorResponse {
         report: None,
         tailored_content: None,
         content_changes: vec![],
+        artifact: None,
+        retailor: None,
         error: Some(error),
     }
 }
@@ -1700,13 +1996,16 @@ fn relative_path(root: &Path, path: &Path) -> String {
 mod tests {
     use super::{
         build_tailoring_prompt, civil_date_from_days, company_role_slug, content_changes,
-        parse_tailored_resume_from_response, partial_tailoring_response, pdf_page_count, slugify,
-        normalize_high_emphasis_bullet_rewrite_decisions, unchanged_experience_bullets,
-        validate_high_emphasis_bullet_rewrites, validate_tailored_content, write_variant_files,
-        BulletKeywordEmphasis, BulletRewriteDecision, BulletRewriteOutcome, TailorRequest,
-        TailoredResume, TailoringReport, MAX_COMPANY_ROLE_SLUG_LEN,
+        missing_model_placement_terms, normalize_high_emphasis_bullet_rewrite_decisions,
+        parse_tailored_resume_from_response, partial_tailoring_response, pdf_page_count,
+        publish_verified_artifact, reconcile_model_placement_report, sha256_file, slugify,
+        unchanged_experience_bullets, validate_high_emphasis_bullet_rewrites,
+        validate_tailored_content, write_variant_files, BulletKeywordEmphasis,
+        BulletRewriteDecision, BulletRewriteOutcome, TailorRequest, TailoredResume,
+        TailoringReport, MAX_COMPANY_ROLE_SLUG_LEN,
     };
     use crate::analysis::{JobAnalysis, KeywordSignal};
+    use crate::evidence::EvidenceEntry;
     use lopdf::{dictionary, Document, Object};
     use serde_json::json;
 
@@ -1761,6 +2060,7 @@ mod tests {
             &analysis(),
             &base_resume(),
             &[],
+            &[],
             BulletKeywordEmphasis::Balanced,
             false,
             None,
@@ -1770,6 +2070,61 @@ mod tests {
         assert!(prompt.contains("Do not invent"));
         assert!(prompt.contains("omitted_unsupported_keywords"));
         assert!(prompt.contains("Rust Engineer"));
+    }
+
+    #[test]
+    fn tailoring_prompt_authorizes_selected_claim_replacement() {
+        let evidence = vec![EvidenceEntry {
+            term: "Angular dans l’expérience".to_string(),
+            kind: "technology".to_string(),
+            proof_note: None,
+            user_attested: true,
+            allow_model_role_placement: true,
+        }];
+        let prompt = build_tailoring_prompt(
+            "fr",
+            &json!({"title": "Développeur"}),
+            &analysis(),
+            &base_resume(),
+            &evidence,
+            &["Angular dans l’expérience".to_string()],
+            BulletKeywordEmphasis::Balanced,
+            false,
+            None,
+        );
+
+        assert!(prompt.contains("authorized you to place them in the most plausible existing role"));
+        assert!(prompt.contains("completely replace the least job-relevant existing bullet"));
+        assert!(prompt.contains("Angular dans l’expérience"));
+        assert!(prompt.contains("do not invent adjacent details"));
+    }
+
+    #[test]
+    fn selected_claims_must_appear_in_experience_and_are_reconciled_in_report() {
+        let tailored = json!({
+            "experience": [{"bullets": ["Built Angular interfaces for internal users."]}]
+        });
+        let selected = vec![
+            "Angular dans l’expérience".to_string(),
+            "GCP dans l’expérience".to_string(),
+        ];
+        assert_eq!(
+            missing_model_placement_terms(&tailored, &selected),
+            vec!["GCP dans l’expérience".to_string()]
+        );
+
+        let mut report = TailoringReport {
+            covered_keywords: vec![],
+            omitted_unsupported_keywords: vec!["Angular dans l’expérience".to_string()],
+            changed_fields: vec![],
+            safety_notes: vec![],
+            estimated_ats_coverage_score: 73,
+            bullet_rewrite_decisions: vec![],
+        };
+        reconcile_model_placement_report(&mut report, &selected[..1]);
+        assert!(report.omitted_unsupported_keywords.is_empty());
+        assert_eq!(report.covered_keywords, vec!["Angular dans l’expérience"]);
+        assert_eq!(report.estimated_ats_coverage_score, 73);
     }
 
     #[test]
@@ -1786,6 +2141,7 @@ mod tests {
             &analysis(),
             &base_resume(),
             &[],
+            &[],
             BulletKeywordEmphasis::Balanced,
             true,
             None,
@@ -1801,6 +2157,7 @@ mod tests {
             &json!({}),
             &analysis(),
             &base_resume(),
+            &[],
             &[],
             BulletKeywordEmphasis::High,
             false,
@@ -1989,7 +2346,8 @@ mod tests {
         let base = base_resume();
         let mut content = base.clone();
         content["experience"][0]["bullets"][0] = json!("Built reliable Rust APIs.");
-        content["experience"][0]["bullets"][1] = json!("Strengthened production service reliability.");
+        content["experience"][0]["bullets"][1] =
+            json!("Strengthened production service reliability.");
         let mut tailored = high_emphasis_tailored_resume(
             content,
             vec![
@@ -2026,7 +2384,8 @@ mod tests {
         let base = base_resume();
         let mut content = base.clone();
         content["experience"][0]["bullets"][0] = json!("Built reliable Rust APIs.");
-        content["experience"][0]["bullets"][1] = json!("Strengthened production service reliability.");
+        content["experience"][0]["bullets"][1] =
+            json!("Strengthened production service reliability.");
         let tailored = high_emphasis_tailored_resume(
             content,
             vec![BulletRewriteDecision {
@@ -2046,7 +2405,8 @@ mod tests {
         let base = base_resume();
         let mut content = base.clone();
         content["experience"][0]["bullets"][0] = json!("Built reliable Rust APIs.");
-        content["experience"][0]["bullets"][1] = json!("Strengthened production service reliability.");
+        content["experience"][0]["bullets"][1] =
+            json!("Strengthened production service reliability.");
         let tailored = high_emphasis_tailored_resume(
             content,
             vec![
@@ -2137,7 +2497,7 @@ mod tests {
     }
 
     #[test]
-    fn partial_result_publishes_a_distinct_stable_docx() {
+    fn partial_result_points_to_the_variant_without_creating_a_generated_alias() {
         let suffix = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
@@ -2159,7 +2519,6 @@ mod tests {
 
         let response = partial_tailoring_response(
             &root,
-            "en",
             "test-en".to_string(),
             &variant_json_path,
             &report_json_path,
@@ -2192,12 +2551,9 @@ mod tests {
         assert!(response.content_changes.is_empty());
         assert_eq!(
             response.latest_docx_path.as_deref(),
-            Some("resume/generated/Xevier_T_CV_en.docx")
+            Some("resume/variants/test-en/Xevier_T_CV_en.docx")
         );
-        assert_eq!(
-            std::fs::read(generated_dir.join("Xevier_T_CV_en.docx")).unwrap(),
-            b"validated tailored docx"
-        );
+        assert!(!generated_dir.join("Xevier_T_CV_en.docx").exists());
         assert_eq!(
             std::fs::read(generated_template_output).unwrap(),
             b"existing generated output"
@@ -2223,7 +2579,6 @@ mod tests {
 
         let response = partial_tailoring_response(
             &root,
-            "en",
             "test-en".to_string(),
             &variant_json_path,
             &report_json_path,
@@ -2297,5 +2652,91 @@ mod tests {
 
         assert_eq!(pdf_page_count(&path).unwrap(), 1);
         std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn verified_docx_fallback_replaces_stable_docx_and_removes_stale_pdf() {
+        let suffix = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("resume-docx-publish-{suffix}"));
+        let variant_dir = root.join("resume/variants/test-en");
+        let downloads = root.join("Downloads");
+        std::fs::create_dir_all(&variant_dir).unwrap();
+        std::fs::create_dir_all(&downloads).unwrap();
+        let variant_json = variant_dir.join("variant.json");
+        let docx = variant_dir.join("Xevier_T_CV_en.docx");
+        std::fs::write(&variant_json, serde_json::to_vec(&base_resume()).unwrap()).unwrap();
+        std::fs::write(&docx, b"validated tailored docx").unwrap();
+        std::fs::write(downloads.join("Xevier_T_CV_en.docx"), b"stale base docx").unwrap();
+        std::fs::write(downloads.join("Xevier_T_CV_en.pdf"), b"stale prior pdf").unwrap();
+
+        let artifact = publish_verified_artifact(
+            &root,
+            "test-en",
+            &docx,
+            "en",
+            "docx",
+            &variant_json,
+            &docx,
+            None,
+            "passed",
+            "failed",
+            Some(&downloads),
+        )
+        .unwrap();
+
+        let published = downloads.join("Xevier_T_CV_en.docx");
+        assert_eq!(
+            std::fs::read(&published).unwrap(),
+            b"validated tailored docx"
+        );
+        assert!(!downloads.join("Xevier_T_CV_en.pdf").exists());
+        assert_eq!(artifact.sha256, sha256_file(&published).unwrap());
+        assert!(variant_dir.join("artifact-manifest.json").is_file());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn verified_pdf_replaces_stable_pdf_and_removes_stale_docx() {
+        let suffix = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("resume-pdf-publish-{suffix}"));
+        let variant_dir = root.join("resume/variants/test-en");
+        let downloads = root.join("Downloads");
+        std::fs::create_dir_all(&variant_dir).unwrap();
+        std::fs::create_dir_all(&downloads).unwrap();
+        let variant_json = variant_dir.join("variant.json");
+        let docx = variant_dir.join("Xevier_T_CV_en.docx");
+        let pdf = variant_dir.join("Xevier_T_CV_en.pdf");
+        std::fs::write(&variant_json, serde_json::to_vec(&base_resume()).unwrap()).unwrap();
+        std::fs::write(&docx, b"validated tailored docx").unwrap();
+        std::fs::write(&pdf, b"one-page tailored pdf").unwrap();
+        std::fs::write(downloads.join("Xevier_T_CV_en.docx"), b"stale prior docx").unwrap();
+        std::fs::write(downloads.join("Xevier_T_CV_en.pdf"), b"stale base pdf").unwrap();
+
+        let artifact = publish_verified_artifact(
+            &root,
+            "test-en",
+            &pdf,
+            "en",
+            "pdf",
+            &variant_json,
+            &docx,
+            Some(&pdf),
+            "passed",
+            "passed",
+            Some(&downloads),
+        )
+        .unwrap();
+
+        let published = downloads.join("Xevier_T_CV_en.pdf");
+        assert_eq!(std::fs::read(&published).unwrap(), b"one-page tailored pdf");
+        assert!(!downloads.join("Xevier_T_CV_en.docx").exists());
+        assert_eq!(artifact.sha256, sha256_file(&published).unwrap());
+        std::fs::remove_dir_all(root).unwrap();
     }
 }

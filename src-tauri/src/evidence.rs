@@ -18,6 +18,8 @@ pub struct EvidenceEntry {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub proof_note: Option<String>,
     pub user_attested: bool,
+    #[serde(default)]
+    pub allow_model_role_placement: bool,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -26,6 +28,8 @@ pub struct SelectedEvidence {
     pub kind: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub proof_note: Option<String>,
+    #[serde(default)]
+    pub allow_model_role_placement: bool,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -40,6 +44,7 @@ pub struct PreflightItem {
     pub matched_term: Option<String>,
     pub proof_note: Option<String>,
     pub eligible_for_bullets: bool,
+    pub allow_model_role_placement: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -57,7 +62,7 @@ pub fn load_evidence_bank(root: &Path) -> Result<EvidenceBank, TailoringError> {
     let path = evidence_bank_path(root);
     if !path.exists() {
         return Ok(EvidenceBank {
-            version: 1,
+            version: 2,
             entries: vec![],
         });
     }
@@ -65,8 +70,8 @@ pub fn load_evidence_bank(root: &Path) -> Result<EvidenceBank, TailoringError> {
         std::fs::read_to_string(path).map_err(|error| TailoringError::Io(error.to_string()))?;
     let mut bank: EvidenceBank = serde_json::from_str(&text)
         .map_err(|error| TailoringError::InvalidJson(error.to_string()))?;
-    if bank.version == 0 {
-        bank.version = 1;
+    if bank.version < 2 {
+        bank.version = 2;
     }
     Ok(bank)
 }
@@ -82,27 +87,29 @@ pub fn save_selected_evidence(
             continue;
         }
         let proof_note = clean_proof(item.proof_note.as_deref());
-        match bank
-            .entries
-            .iter_mut()
-            .find(|entry| equivalent(&entry.term, term))
-        {
+        match bank.entries.iter_mut().find(|entry| {
+            equivalent(&entry.term, term)
+                || (item.allow_model_role_placement
+                    && placement_equivalent_terms(&entry.term, term))
+        }) {
             Some(entry) => {
                 entry.kind = item.kind.clone();
                 if proof_note.is_some() {
                     entry.proof_note = proof_note;
                 }
                 entry.user_attested = true;
+                entry.allow_model_role_placement |= item.allow_model_role_placement;
             }
             None => bank.entries.push(EvidenceEntry {
                 term: term.to_string(),
                 kind: item.kind.clone(),
                 proof_note,
                 user_attested: true,
+                allow_model_role_placement: item.allow_model_role_placement,
             }),
         }
     }
-    bank.version = 1;
+    bank.version = 2;
     let path = evidence_bank_path(root);
     let text = serde_json::to_string_pretty(&bank)
         .map_err(|error| TailoringError::InvalidJson(error.to_string()))?;
@@ -175,10 +182,12 @@ pub fn preflight_items(
             let base_match = base_strings
                 .iter()
                 .find(|value| text_supports(value, &candidate.term));
-            let bank_entry = bank
-                .entries
-                .iter()
-                .find(|entry| entry.user_attested && equivalent(&entry.term, &candidate.term));
+            let bank_entry = bank.entries.iter().find(|entry| {
+                entry.user_attested
+                    && (equivalent(&entry.term, &candidate.term)
+                        || (entry.allow_model_role_placement
+                            && placement_equivalent_terms(&entry.term, &candidate.term)))
+            });
             let (source, resolution, resolution_reason, matched_term, proof_note) =
                 if let Some(base_match) = base_match {
                     (
@@ -213,7 +222,9 @@ pub fn preflight_items(
                         None,
                     )
                 };
-            let eligible_for_bullets = source == "base_resume" || proof_note.is_some();
+            let eligible_for_bullets = source == "base_resume"
+                || proof_note.is_some()
+                || bank_entry.is_some_and(|entry| entry.allow_model_role_placement);
             PreflightItem {
                 term: candidate.term,
                 kind: candidate.kind,
@@ -224,6 +235,8 @@ pub fn preflight_items(
                 matched_term,
                 proof_note,
                 eligible_for_bullets,
+                allow_model_role_placement: bank_entry
+                    .is_some_and(|entry| entry.allow_model_role_placement),
             }
         })
         .collect::<Vec<_>>();
@@ -246,8 +259,95 @@ pub fn selected_for_prompt(selected: &[SelectedEvidence]) -> Vec<EvidenceEntry> 
                 kind: item.kind.clone(),
                 proof_note: clean_proof(item.proof_note.as_deref()),
                 user_attested: true,
+                allow_model_role_placement: item.allow_model_role_placement,
             })
         })
+        .collect()
+}
+
+pub fn infer_selected_term_kind(analysis: &JobAnalysis, selected_term: &str) -> String {
+    let selected_tokens = placement_token_set(selected_term);
+    let mut candidates = Vec::new();
+    candidates.extend(analysis.core_keywords.iter().map(|signal| Candidate {
+        term: signal.term.clone(),
+        kind: inferred_kind(&signal.term, &group_kind(&signal.category)),
+        importance: signal.importance,
+    }));
+    candidates.extend(
+        analysis
+            .required_skills
+            .iter()
+            .chain(analysis.preferred_skills.iter())
+            .chain(analysis.tools_and_platforms.iter())
+            .map(|term| candidate(term, inferred_kind(term, "technology"), 0)),
+    );
+    candidates.extend(
+        analysis
+            .domain_terms
+            .iter()
+            .map(|term| candidate(term, "method_domain", 0)),
+    );
+    candidates.extend(
+        analysis
+            .responsibility_phrases
+            .iter()
+            .map(|term| candidate(term, "responsibility", 0)),
+    );
+
+    candidates
+        .into_iter()
+        .filter_map(|candidate| {
+            let candidate_tokens = placement_token_set(&candidate.term);
+            let overlap = selected_tokens.intersection(&candidate_tokens).count();
+            (overlap > 0).then_some((overlap, candidate_tokens.len(), candidate.kind))
+        })
+        .max_by_key(|(overlap, token_count, _)| (*overlap, *token_count))
+        .map(|(_, _, kind)| kind)
+        .unwrap_or_else(|| inferred_kind(selected_term, "method_domain"))
+}
+
+pub(crate) fn equivalent_terms(left: &str, right: &str) -> bool {
+    equivalent(left, right)
+}
+
+pub(crate) fn placement_term_is_covered(text: &str, term: &str) -> bool {
+    let text_tokens = token_set(text);
+    let term_tokens = placement_token_set(term);
+    !term_tokens.is_empty() && term_tokens.is_subset(&text_tokens)
+}
+
+pub(crate) fn placement_equivalent_terms(left: &str, right: &str) -> bool {
+    let left = placement_token_set(left);
+    let right = placement_token_set(right);
+    !left.is_empty() && left == right
+}
+
+fn placement_token_set(value: &str) -> BTreeSet<String> {
+    const PLACEMENT_WRAPPERS: &[&str] = &[
+        "practice",
+        "practical",
+        "experience",
+        "experienced",
+        "pratique",
+        "expérience",
+        "dans",
+        "dan",
+        "du",
+        "de",
+        "des",
+        "la",
+        "le",
+        "les",
+        "l",
+        "d",
+        "en",
+        "au",
+        "aux",
+        "maîtrise",
+    ];
+    token_set(value)
+        .into_iter()
+        .filter(|token| !PLACEMENT_WRAPPERS.contains(&token.as_str()))
         .collect()
 }
 
@@ -590,6 +690,7 @@ mod tests {
                 kind: "technology".into(),
                 proof_note: None,
                 user_attested: true,
+                allow_model_role_placement: false,
             }],
         };
         let items = preflight_items(
@@ -688,6 +789,7 @@ mod tests {
                 kind: "responsibility".into(),
                 proof_note: None,
                 user_attested: true,
+                allow_model_role_placement: false,
             }],
         };
         let items = preflight_items(&analysis, &serde_json::json!({}), &bank);
@@ -711,6 +813,7 @@ mod tests {
                     kind: "technology".into(),
                     proof_note: None,
                     user_attested: true,
+                    allow_model_role_placement: false,
                 }],
             })
             .unwrap(),
@@ -723,16 +826,103 @@ mod tests {
                 term: "Fluent written and spoken English".into(),
                 kind: "technology".into(),
                 proof_note: Some("Used professionally".into()),
+                allow_model_role_placement: false,
             }],
         )
         .unwrap();
 
         assert_eq!(bank.entries.len(), 1);
+        assert_eq!(bank.version, 2);
+        assert!(!bank.entries[0].allow_model_role_placement);
         assert_eq!(bank.entries[0].term, "English fluency");
         assert_eq!(
             bank.entries[0].proof_note.as_deref(),
             Some("Used professionally")
         );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn model_placement_authorization_makes_saved_evidence_bullet_eligible() {
+        let analysis = analysis(vec![signal("Angular", "technology", 5)]);
+        let bank = EvidenceBank {
+            version: 2,
+            entries: vec![EvidenceEntry {
+                term: "Angular".into(),
+                kind: "technology".into(),
+                proof_note: None,
+                user_attested: true,
+                allow_model_role_placement: true,
+            }],
+        };
+
+        let items = preflight_items(&analysis, &serde_json::json!({}), &bank);
+
+        assert!(items[0].eligible_for_bullets);
+        assert!(items[0].allow_model_role_placement);
+    }
+
+    #[test]
+    fn placement_coverage_ignores_experience_wrapper_words() {
+        assert!(placement_term_is_covered(
+            "Développé des interfaces Angular pour des applications métier.",
+            "Angular dans l’expérience"
+        ));
+        assert!(placement_term_is_covered(
+            "Applied Domain-Driven Design to modular backend services.",
+            "pratique du Domain-Driven Design dans l’expérience"
+        ));
+    }
+
+    #[test]
+    fn selected_experience_phrase_inherits_the_underlying_skill_kind() {
+        let mut analysis = analysis(vec![]);
+        analysis.required_skills = vec!["Angular".into()];
+
+        assert_eq!(
+            infer_selected_term_kind(&analysis, "Angular dans l’expérience"),
+            "technology"
+        );
+    }
+
+    #[test]
+    fn placement_attestation_updates_the_underlying_saved_capability() {
+        let suffix = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("resume-placement-evidence-{suffix}"));
+        std::fs::create_dir_all(root.join("resume")).unwrap();
+        std::fs::write(
+            evidence_bank_path(&root),
+            serde_json::to_string(&EvidenceBank {
+                version: 1,
+                entries: vec![EvidenceEntry {
+                    term: "Angular".into(),
+                    kind: "technology".into(),
+                    proof_note: None,
+                    user_attested: true,
+                    allow_model_role_placement: false,
+                }],
+            })
+            .unwrap(),
+        )
+        .unwrap();
+
+        let bank = save_selected_evidence(
+            &root,
+            &[SelectedEvidence {
+                term: "Angular dans l’expérience".into(),
+                kind: "technology".into(),
+                proof_note: None,
+                allow_model_role_placement: true,
+            }],
+        )
+        .unwrap();
+
+        assert_eq!(bank.entries.len(), 1);
+        assert_eq!(bank.entries[0].term, "Angular");
+        assert!(bank.entries[0].allow_model_role_placement);
         std::fs::remove_dir_all(root).unwrap();
     }
 }

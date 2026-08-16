@@ -1,3 +1,4 @@
+use crate::api_usage::record_response_usage;
 use reqwest::StatusCode;
 use serde::{Deserialize, Serialize};
 
@@ -185,7 +186,9 @@ pub async fn analyze_job(
         return Err(AnalysisError::Http { status, body });
     }
 
-    parse_job_analysis_from_response(&body)
+    let analysis = parse_job_analysis_from_response(&body)?;
+    record_response_usage("job_analysis", &config.model, &body);
+    Ok(analysis)
 }
 
 pub fn parse_job_analysis_from_response(body: &str) -> Result<JobAnalysis, AnalysisError> {

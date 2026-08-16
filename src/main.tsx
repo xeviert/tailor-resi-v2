@@ -5,6 +5,7 @@ import {
   type ErrorInfo,
   type ReactNode,
   useEffect,
+  useLayoutEffect,
   useRef,
   useState,
 } from 'react';
@@ -23,10 +24,25 @@ type Report = {
   estimated_ats_coverage_score: number;
   omitted_unsupported_keywords: string[];
 };
+type RetailorMetadata = {
+  source_variant_slug: string;
+  source_ats_score: number;
+  selected_terms: string[];
+};
 type ContentChange = { path: string; before: string; after: string };
+type ArtifactProvenance = {
+  variant_slug: string;
+  format: 'pdf' | 'docx';
+  source_path: string;
+  downloads_path: string;
+  sha256: string;
+  manifest_path: string;
+  verification_status: string;
+};
 type ResumeResult = {
   success: boolean;
   tailoring_status: 'completed' | 'partial' | 'failed';
+  variant_slug: string | null;
   validation_status: string;
   fit_status: string;
   page_count: number | null;
@@ -45,20 +61,31 @@ type ResumeResult = {
   downloads_error: string | null;
   docx_opened: boolean;
   docx_open_error: string | null;
+  artifact: ArtifactProvenance | null;
+  retailor?: RetailorMetadata | null;
   error: string | null;
 };
 type Analysis = { summary: string };
+type ResultSource = 'command' | 'event' | 'recovery';
+type RunStatus = 'analysis_ready' | 'completed' | 'partial' | 'failed';
 type PipelineResult = {
   analysis: Analysis;
   resume: ResumeResult;
   recovered_from_artifacts?: boolean;
-  result_source?: 'command' | 'event' | 'recovery';
+  result_source?: ResultSource;
 };
-type StoredPipelineResult = PipelineResult & {
+type StoredPipelineResult = {
   schema_version: number;
   capture_received_at_ms: number;
   language: Language;
   recovered_from_artifacts: boolean;
+  status?: RunStatus;
+  summary?: string;
+  failed_stage?: string | null;
+  error?: string | null;
+  analysis: Analysis | null;
+  resume: ResumeResult | null;
+  result_source?: ResultSource;
 };
 type EvidenceKind = 'technology' | 'method_domain' | 'responsibility';
 type PreflightItem = {
@@ -74,6 +101,7 @@ type PreflightItem = {
   matched_term: string | null;
   proof_note: string | null;
   eligible_for_bullets: boolean;
+  allow_model_role_placement: boolean;
 };
 type PreflightResult = { analysis: Analysis; items: PreflightItem[] };
 type EvidenceEntry = {
@@ -81,6 +109,7 @@ type EvidenceEntry = {
   kind: EvidenceKind;
   proof_note: string | null;
   user_attested: boolean;
+  allow_model_role_placement?: boolean;
 };
 type EvidenceBank = { version: number; entries: EvidenceEntry[] };
 type PipelineProgress = {
@@ -90,6 +119,7 @@ type PipelineProgress = {
   attempt: number | null;
   total_attempts: number | null;
 };
+type WorkflowPhase = 'job' | 'tailoring';
 const BRIDGE_HEALTH_URL = 'http://127.0.0.1:3000/health';
 const PIPELINE_STAGES = [
   ['ats_analysis', 'ATS analysis'],
@@ -100,6 +130,23 @@ const PIPELINE_STAGES = [
   ['locked_validation', 'Layout validation'],
   ['pdf_fit', 'PDF one-page fit'],
 ] as const;
+
+const INITIAL_TAILORING_PROGRESS: PipelineProgress[] = [
+  {
+    stage: 'ats_analysis',
+    status: 'completed',
+    message: 'Job analysis and evidence review completed.',
+    attempt: null,
+    total_attempts: null,
+  },
+  {
+    stage: 'resume_tailoring',
+    status: 'started',
+    message: 'Starting resume tailoring with your reviewed evidence.',
+    attempt: null,
+    total_attempts: null,
+  },
+];
 
 class AppErrorBoundary extends Component<
   { children: ReactNode },
@@ -193,6 +240,61 @@ function errorText(reason: unknown) {
   }
 }
 
+export function normalizeOutcome(candidate: StoredPipelineResult): StoredPipelineResult {
+  const analysisSummary = candidate.analysis?.summary?.trim();
+  const errorMessage = candidate.error?.trim();
+  const summary =
+    candidate.summary?.trim() ||
+    analysisSummary ||
+    (errorMessage
+      ? `No AI analysis was produced. The run failed: ${errorMessage}`
+      : 'This run finished without a usable analysis summary.');
+  const status =
+    candidate.status ??
+    candidate.resume?.tailoring_status ??
+    (candidate.analysis ? 'analysis_ready' : 'failed');
+  return { ...candidate, status, summary };
+}
+
+export function localOutcome({
+  captureId,
+  language,
+  analysis,
+  resume = null,
+  error = null,
+  failedStage = null,
+}: {
+  captureId: number;
+  language: Language;
+  analysis: Analysis | null;
+  resume?: ResumeResult | null;
+  error?: string | null;
+  failedStage?: string | null;
+}): StoredPipelineResult {
+  const status: RunStatus = error
+    ? 'failed'
+    : resume?.tailoring_status ?? 'analysis_ready';
+  const stage = failedStage?.replace(/_/g, ' ') ?? 'processing';
+  const summary = error
+    ? analysis
+      ? `${analysis.summary} The run then failed during ${stage}: ${error}`
+      : `No AI analysis was produced. The run failed during ${stage}: ${error}`
+    : analysis?.summary ?? 'This run finished without an analysis summary.';
+  return {
+    schema_version: 2,
+    capture_received_at_ms: captureId,
+    language,
+    recovered_from_artifacts: false,
+    status,
+    summary,
+    failed_stage: failedStage,
+    error,
+    analysis,
+    resume,
+    result_source: 'command',
+  };
+}
+
 function ProgressPanel({
   events,
   running,
@@ -230,6 +332,8 @@ function ProgressPanel({
           return (
             <li
               className={`flex items-start gap-[7px] text-xs leading-snug ${progressTextClass[status]}`}
+              data-testid={`pipeline-stage-${stage}`}
+              data-status={status}
               key={stage}
             >
               <span
@@ -419,18 +523,95 @@ function TailoringChanges({
   );
 }
 
-function ResultPanel({
+export function RunSummaryPanel({ outcome }: { outcome: StoredPipelineResult }) {
+  const status = outcome.status ?? 'failed';
+  const report = outcome.resume?.report ?? null;
+  const failed = status === 'failed';
+  const heading =
+    status === 'analysis_ready'
+      ? 'ATS analysis ready'
+      : status === 'completed'
+        ? 'Analysis and tailored resume ready'
+        : status === 'partial'
+          ? 'Analysis ready; document output is partial'
+          : 'Run analysis and failure report';
+  return (
+    <section
+      data-testid='run-summary'
+      aria-live='polite'
+      role={failed ? 'alert' : undefined}
+      className={`mt-5 grid grid-cols-[1fr_auto] gap-5 rounded-[14px] border p-6 shadow-[0_8px_24px_#1f2a2110] max-[680px]:grid-cols-1 ${
+        failed
+          ? 'border-[#df9f8b] bg-[#fff8f5]'
+          : status === 'partial'
+            ? 'border-[#e2c77c] bg-[#fffdf7]'
+            : 'border-[#a9ddba] bg-[#f8fcf9]'
+      }`}
+    >
+      <div>
+        <p className={eyebrowClass}>ATS ANALYSIS SUMMARY</p>
+        <h2 className='mt-0 mb-2 text-[22px] font-bold'>{heading}</h2>
+        <p className='m-0' data-testid='run-summary-text'>
+          {outcome.summary}
+        </p>
+        {outcome.failed_stage && (
+          <p className='mt-3 mb-0 text-[13px] font-bold text-[#9e411e]'>
+            Failed stage: {outcome.failed_stage.replace(/_/g, ' ')}
+          </p>
+        )}
+        {outcome.recovered_from_artifacts && (
+          <p className='mt-3 mb-0 text-xs font-bold text-[#176a46]'>
+            Restored from the saved artifacts for this job.
+          </p>
+        )}
+      </div>
+      {report && (
+        <div className='min-w-[110px] text-center max-[680px]:text-left'>
+          <strong className='block text-4xl text-[#176a46]' data-testid='run-summary-score'>
+            {report.estimated_ats_coverage_score}
+          </strong>
+          <span className='text-xs text-[#627067]'>estimated ATS coverage</span>
+        </div>
+      )}
+    </section>
+  );
+}
+
+export function ResultPanel({
   result,
   action,
+  selectedOmittedTerms = new Set<string>(),
+  onToggleOmittedTerm,
+  onRetailor,
+  retailoring = false,
 }: {
   result: PipelineResult;
-  action: (command: string) => void;
+  action: (command: string, variantSlug?: string, format?: 'pdf' | 'docx') => void;
+  selectedOmittedTerms?: Set<string>;
+  onToggleOmittedTerm?: (term: string) => void;
+  onRetailor?: () => void;
+  retailoring?: boolean;
 }) {
   const { resume } = result;
   const partial = resume.tailoring_status === 'partial';
   const report = resume.report;
-  const hasPdf = Boolean(resume.latest_pdf_path);
-  const hasDocx = Boolean(resume.latest_docx_path);
+  const contentChanges = Array.isArray(resume.content_changes)
+    ? resume.content_changes
+    : [];
+  const omittedKeywords = Array.isArray(report?.omitted_unsupported_keywords)
+    ? report.omitted_unsupported_keywords
+    : [];
+  const hasPdf = resume.artifact
+    ? resume.artifact.format === 'pdf'
+    : Boolean(resume.latest_pdf_path);
+  const hasDocx = resume.artifact
+    ? resume.artifact.format === 'docx'
+    : Boolean(resume.latest_docx_path);
+  const artifactFormat: 'pdf' | 'docx' = hasPdf ? 'pdf' : 'docx';
+  const scoreDelta =
+    report && resume.retailor
+      ? report.estimated_ats_coverage_score - resume.retailor.source_ats_score
+      : null;
   const saveMessage = hasPdf
     ? resume.downloads_pdf_path
       ? `Locked sections validated - ${resume.page_count} page - copied to Downloads.`
@@ -456,14 +637,6 @@ function ResultPanel({
               ? 'Tailoring summary ready; PDF not ready'
               : 'Tailoring summary ready'}
         </h2>
-        <p className='mt-0' data-testid='completion-summary'>
-          {result.analysis.summary}
-        </p>
-        {result.recovered_from_artifacts && (
-          <p className='mt-2 mb-0 text-xs font-bold text-[#176a46]'>
-            Recovered from the completed tailoring artifacts for this job.
-          </p>
-        )}
         <p className={mutedClass}>{saveMessage}</p>
         <p className='mt-3.5 mb-0 text-[13px] font-bold capitalize text-[#176a46]'>
           {resume.experience_bullets_changed} experience bullets{' '}
@@ -472,6 +645,16 @@ function ResultPanel({
             : 'tailored'}{' '}
           - {resume.bullet_keyword_emphasis} emphasis
         </p>
+        {report && resume.retailor && scoreDelta !== null && (
+          <p
+            className='mt-3.5 mb-0 text-[13px] font-bold text-[#176a46]'
+            data-testid='retailor-score-delta'
+          >
+            Previous {resume.retailor.source_ats_score} → current{' '}
+            {report.estimated_ats_coverage_score} ({scoreDelta >= 0 ? '+' : ''}
+            {scoreDelta})
+          </p>
+        )}
         {resume.error && (
           <p className='mt-3.5 mb-0 rounded-lg bg-[#fff6df] px-3 py-2.5 text-[13px] text-[#795b13] [overflow-wrap:anywhere]'>
             Output step: {resume.error}
@@ -499,47 +682,87 @@ function ResultPanel({
           </p>
         )}
       </div>
-      {report && (
-        <div className='min-w-[110px] text-center max-[680px]:text-left'>
-          <strong className='block text-4xl text-[#176a46]'>
-            <span data-testid='completion-ats-score'>
-            {report.estimated_ats_coverage_score}
-            </span>
-          </strong>
-          <span className='text-xs text-[#627067]'>estimated ATS coverage</span>
-        </div>
-      )}
       {(hasPdf || hasDocx) && (
         <div className='col-span-full flex items-center gap-2.5 max-[680px]:flex-wrap'>
           <button
             className={primaryButtonClass}
-            onClick={() =>
-              action(hasPdf ? 'open_latest_pdf' : 'open_latest_docx')
-            }
+            onClick={() => {
+              if (resume.variant_slug) {
+                action('open_result_artifact', resume.variant_slug, artifactFormat);
+              } else {
+                action(hasPdf ? 'open_latest_pdf' : 'open_latest_docx');
+              }
+            }}
           >
             {hasPdf ? 'Open PDF' : 'Open DOCX'}
           </button>
           <button
             className={secondaryButtonClass}
-            onClick={() =>
-              action(hasPdf ? 'reveal_latest_pdf' : 'reveal_latest_docx')
-            }
+            onClick={() => {
+              if (resume.variant_slug) {
+                action('reveal_result_artifact', resume.variant_slug, artifactFormat);
+              } else {
+                action(hasPdf ? 'reveal_latest_pdf' : 'reveal_latest_docx');
+              }
+            }}
           >
             Open folder
           </button>
         </div>
       )}
-      {report && report.omitted_unsupported_keywords.length > 0 && (
-        <p className='col-span-full m-0 text-[#6f5521]'>
-          <b>Still not added:</b>{' '}
-          {report.omitted_unsupported_keywords.join(', ')}
+      {omittedKeywords.length > 0 && (
+        <div className='col-span-full border-t border-[#e7ebe7] pt-[18px]'>
+          <p className='m-0 font-bold text-[#6f5521]'>Still not added</p>
+          <p className='mt-1.5 mb-3 max-w-[780px] text-[13px] leading-relaxed text-[#627067]'>
+            Select only claims that are true. Your selection authorizes the AI
+            to place each claim in the most plausible existing role and replace
+            a lower-value bullet while preserving the locked layout.
+          </p>
+          <div className='flex flex-wrap gap-2' aria-label='Omitted ATS phrases'>
+            {omittedKeywords.map((term) => {
+              const pressed = selectedOmittedTerms.has(term);
+              return (
+                <button
+                  type='button'
+                  className={`cursor-pointer rounded-full border px-3 py-1.5 text-[13px] font-bold transition-colors disabled:cursor-not-allowed disabled:opacity-65 ${
+                    pressed
+                      ? 'border-[#176a46] bg-[#176a46] text-white'
+                      : 'border-[#d6c58d] bg-[#fff9e8] text-[#6f5521] hover:border-[#aa8734]'
+                  }`}
+                  aria-pressed={pressed}
+                  disabled={retailoring || !onToggleOmittedTerm}
+                  key={term}
+                  onClick={() => onToggleOmittedTerm?.(term)}
+                >
+                  {term}
+                </button>
+              );
+            })}
+          </div>
+          {onRetailor && (
+            <button
+              type='button'
+              className={`${primaryButtonClass} mt-4`}
+              disabled={retailoring || selectedOmittedTerms.size === 0}
+              onClick={onRetailor}
+            >
+              {retailoring
+                ? 'Re-tailoring...'
+                : `Re-tailor selected (${selectedOmittedTerms.size})`}
+            </button>
+          )}
+        </div>
+      )}
+      {omittedKeywords.length === 0 && resume.retailor && (
+        <p className='col-span-full m-0 border-t border-[#e7ebe7] pt-[18px] font-bold text-[#176a46]'>
+          All selected claims were added to this variant.
         </p>
       )}
       {resume.tailored_content !== null && (
         <div className='contents' data-testid='completion-json-changes'>
           <TailoringChanges
             content={resume.tailored_content}
-            changes={resume.content_changes}
+            changes={contentChanges}
           />
         </div>
       )}
@@ -701,30 +924,106 @@ function PreflightSummary({
   );
 }
 
-function App() {
+function jobText(value: unknown, fallback: string) {
+  return typeof value === 'string' && value.trim() ? value.trim() : fallback;
+}
+
+function FocusedPipeline({
+  job,
+  language,
+  bulletKeywordEmphasis,
+  events,
+  running,
+  onBack,
+}: {
+  job: Record<string, unknown>;
+  language: Language;
+  bulletKeywordEmphasis: BulletKeywordEmphasis;
+  events: PipelineProgress[];
+  running: boolean;
+  onBack: () => void;
+}) {
+  const latest = events[events.length - 1];
+  const stopped = !running && latest?.status === 'failed';
+  return (
+    <section data-testid='focused-pipeline'>
+      <section className={compactPanelClass}>
+        <p className={eyebrowClass}>TAILORING RUN</p>
+        <h2 className='mt-0 mb-2 text-[22px] font-bold'>
+          {jobText(job.title, 'Captured job')}
+        </h2>
+        <p className={mutedClass}>
+          {jobText(job.company, 'Company not provided')} ·{' '}
+          {language === 'en' ? 'English' : 'French'} resume ·{' '}
+          <span className='capitalize'>{bulletKeywordEmphasis}</span> keyword
+          emphasis
+        </p>
+      </section>
+      <ProgressPanel events={events} running={running} />
+      {stopped && (
+        <div className='mt-4'>
+          <button className={secondaryButtonClass} onClick={onBack}>
+            Back to evidence review
+          </button>
+        </div>
+      )}
+    </section>
+  );
+}
+
+export function App() {
   const [capture, setCapture] = useState<CapturedJob | null>(null);
   const [language, setLanguage] = useState<Language>('en');
+  const [languageChanging, setLanguageChanging] = useState(false);
   const [bulletKeywordEmphasis, setBulletKeywordEmphasis] =
     useState<BulletKeywordEmphasis>('balanced');
+  const [workflowPhase, setWorkflowPhase] = useState<WorkflowPhase>('job');
   const [running, setRunning] = useState(false);
   const [error, setError] = useState('');
   const [result, setResult] = useState<PipelineResult | null>(null);
+  const [outcome, setOutcome] = useState<StoredPipelineResult | null>(null);
   const [progressEvents, setProgressEvents] = useState<PipelineProgress[]>([]);
   const [preflight, setPreflight] = useState<PreflightResult | null>(null);
   const [preflightCollapsed, setPreflightCollapsed] = useState(false);
   const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [selectedOmittedTerms, setSelectedOmittedTerms] = useState<Set<string>>(
+    new Set(),
+  );
   const [proofs, setProofs] = useState<Record<string, string>>({});
   const [bank, setBank] = useState<EvidenceBank | null>(null);
-  const resultRef = useRef<HTMLDivElement | null>(null);
+  const summaryRef = useRef<HTMLDivElement | null>(null);
+  const pipelineRef = useRef<HTMLDivElement | null>(null);
   const captureRef = useRef<CapturedJob | null>(null);
   const languageRef = useRef<Language>('en');
   const loadBank = () =>
     invoke<EvidenceBank>('get_evidence_bank')
       .then(setBank)
       .catch((reason) => setError(errorText(reason)));
+  function applyPreflight(next: PreflightResult) {
+    setPreflight(next);
+    setPreflightCollapsed(
+      !next.items.some(
+        (item) => item.resolution === 'confirmation_required',
+      ),
+    );
+    setSelected(
+      new Set(
+        next.items
+          .filter((item) => item.source === 'evidence_bank')
+          .map((item) => item.term),
+      ),
+    );
+    setProofs(
+      Object.fromEntries(
+        next.items
+          .filter((item) => item.proof_note)
+          .map((item) => [item.term, item.proof_note ?? '']),
+      ),
+    );
+  }
   function acceptResult(
-    candidate: PipelineResult,
-    source: 'command' | 'event' | 'recovery',
+    candidate: StoredPipelineResult,
+    source: ResultSource,
     captureId: number,
     targetLanguage: Language,
   ) {
@@ -739,15 +1038,28 @@ function App() {
       });
       return false;
     }
+    const normalized = normalizeOutcome(candidate);
     console.info('[ui-result] accepted result', {
       source,
       captureId,
       targetLanguage,
-      status: candidate.resume.tailoring_status,
-      score: candidate.resume.report?.estimated_ats_coverage_score,
-      changes: candidate.resume.content_changes.length,
+      status: normalized.status,
+      score: normalized.resume?.report?.estimated_ats_coverage_score,
+      changes: normalized.resume?.content_changes?.length ?? 0,
     });
-    setResult({ ...candidate, result_source: source });
+    const accepted = { ...normalized, result_source: source };
+    setOutcome(accepted);
+    setResult(
+      accepted.resume && accepted.resume.tailoring_status !== 'failed'
+        ? {
+            analysis: accepted.analysis ?? { summary: accepted.summary ?? '' },
+            resume: accepted.resume,
+            recovered_from_artifacts: accepted.recovered_from_artifacts,
+            result_source: source,
+          }
+        : null,
+    );
+    setSelectedOmittedTerms(new Set());
     setError('');
     return true;
   }
@@ -771,17 +1083,20 @@ function App() {
       );
       if (!stored) {
         console.info('[ui-result] no matching stored result', { reason });
-        return;
+        return null;
       }
-      acceptResult(
+      return acceptResult(
         stored,
         'recovery',
         stored.capture_received_at_ms,
         stored.language,
-      );
+      )
+        ? normalizeOutcome(stored)
+        : null;
     } catch (reason) {
       console.error('[ui-result] recovery failed', reason);
       setError(`Result recovery failed: ${errorText(reason)}`);
+      return null;
     }
   }
   async function recoverLatestResultForCapture(
@@ -801,11 +1116,11 @@ function App() {
         console.info('[ui-result] no matching result in either language', {
           reason,
         });
-        return;
+        return false;
       }
       languageRef.current = stored.language;
       setLanguage(stored.language);
-      acceptResult(
+      return acceptResult(
         stored,
         'recovery',
         stored.capture_received_at_ms,
@@ -814,15 +1129,23 @@ function App() {
     } catch (reason) {
       console.error('[ui-result] any-language recovery failed', reason);
       setError(`Result recovery failed: ${errorText(reason)}`);
+      return false;
     }
   }
   useEffect(() => {
     void fetch(BRIDGE_HEALTH_URL)
       .then(async (response) => {
-        const health = (await response.json()) as { bridge?: string };
+        const health = (await response.json()) as {
+          bridge?: string;
+          result_protocol_version?: number;
+        };
         if (!response.ok || health.bridge !== 'tauri-rust')
           throw new Error(
             'The Rust capture bridge is unavailable. Stop any legacy capture server on port 3000, then restart the desktop app.',
+          );
+        if (health.result_protocol_version !== 2)
+          throw new Error(
+            'The desktop UI and Rust backend are out of date with each other. Fully stop and restart ResiTailor before running another analysis.',
           );
       })
       .catch((reason) => setError(errorText(reason)));
@@ -841,8 +1164,11 @@ function App() {
       captureRef.current = event.payload;
       setCapture(event.payload);
       setResult(null);
+      setOutcome(null);
       setPreflight(null);
       setPreflightCollapsed(false);
+      setSelectedOmittedTerms(new Set());
+      setWorkflowPhase('job');
       setProgressEvents([]);
       setError('');
     })
@@ -872,7 +1198,7 @@ function App() {
       console.info('[ui-result] result event received', {
         captureId: stored.capture_received_at_ms,
         language: stored.language,
-        status: stored.resume.tailoring_status,
+        status: stored.status ?? stored.resume?.tailoring_status,
       });
       acceptResult(
         stored,
@@ -899,27 +1225,35 @@ function App() {
       window.removeEventListener('unhandledrejection', onUnhandledRejection);
     };
   }, []);
+  useLayoutEffect(() => {
+    if (workflowPhase !== 'tailoring') return;
+    const element = pipelineRef.current;
+    element?.scrollIntoView({ behavior: 'auto', block: 'start' });
+    element?.focus({ preventScroll: true });
+  }, [workflowPhase]);
   useEffect(() => {
-    if (!result) return;
-    console.info('[ui-result] result committed to React', {
-      status: result.resume.tailoring_status,
-      score: result.resume.report?.estimated_ats_coverage_score,
-      changes: result.resume.content_changes.length,
-      recoveredFromArtifacts: result.recovered_from_artifacts ?? false,
+    if (!outcome) return;
+    console.info('[ui-result] outcome committed to React', {
+      status: outcome.status,
+      score: outcome.resume?.report?.estimated_ats_coverage_score,
+      changes: outcome.resume?.content_changes?.length ?? 0,
+      recoveredFromArtifacts: outcome.recovered_from_artifacts,
     });
     const frame = window.requestAnimationFrame(() => {
-      const element = resultRef.current;
+      const element = summaryRef.current;
+      element?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      element?.focus({ preventScroll: true });
       const rect = element?.getBoundingClientRect();
       const diagnostic = {
-        capture_id: captureRef.current?.received_at_ms ?? 0,
-        language: languageRef.current,
-        source: result.result_source ?? 'recovery',
+        capture_id: outcome.capture_received_at_ms,
+        language: outcome.language,
+        source: outcome.result_source ?? 'recovery',
         completion_mounted: Boolean(element),
         completion_visible: Boolean(
           rect && rect.bottom > 0 && rect.top < window.innerHeight,
         ),
-        score: result.resume.report?.estimated_ats_coverage_score ?? null,
-        change_count: result.resume.content_changes.length,
+        score: outcome.resume?.report?.estimated_ats_coverage_score ?? null,
+        change_count: outcome.resume?.content_changes?.length ?? 0,
         viewport_height: window.innerHeight,
         rect_top: rect?.top ?? null,
         rect_bottom: rect?.bottom ?? null,
@@ -930,9 +1264,15 @@ function App() {
       );
     });
     return () => window.cancelAnimationFrame(frame);
-  }, [result]);
+  }, [outcome]);
   async function analyze() {
     console.info('[ui-result] analysis command started', { language });
+    const commandCapture = captureRef.current;
+    if (!commandCapture) {
+      setError('The captured job is unavailable. Capture the job again.');
+      return;
+    }
+    const targetLanguage = language;
     setRunning(true);
     setError('');
     setResult(null);
@@ -942,29 +1282,45 @@ function App() {
         language,
       });
       console.info('[ui-result] analysis command resolved');
-      setPreflight(next);
-      setPreflightCollapsed(
-        !next.items.some(
-          (item) => item.resolution === 'confirmation_required',
-        ),
+      applyPreflight(next);
+      acceptResult(
+        localOutcome({
+          captureId: commandCapture.received_at_ms,
+          language: targetLanguage,
+          analysis: next.analysis,
+        }),
+        'command',
+        commandCapture.received_at_ms,
+        targetLanguage,
       );
-      setSelected(
-        new Set(
-          next.items
-            .filter((item) => item.source === 'evidence_bank')
-            .map((item) => item.term),
-        ),
-      );
-      setProofs(
-        Object.fromEntries(
-          next.items
-            .filter((item) => item.proof_note)
-            .map((item) => [item.term, item.proof_note ?? '']),
-        ),
-      );
+      await recoverResultFor(commandCapture, targetLanguage, 'analysis-command-resolved');
     } catch (reason) {
       console.error('[ui-result] analysis command rejected', reason);
-      setError(errorText(reason));
+      const message = errorText(reason);
+      setError(message);
+      const recovered = await recoverResultFor(
+        commandCapture,
+        targetLanguage,
+        'analysis-command-rejected',
+      );
+      if (
+        !recovered ||
+        recovered.status !== 'failed' ||
+        recovered.error?.trim() !== message.trim()
+      ) {
+        acceptResult(
+          localOutcome({
+            captureId: commandCapture.received_at_ms,
+            language: targetLanguage,
+            analysis: null,
+            error: message,
+            failedStage: 'ats_analysis',
+          }),
+          'command',
+          commandCapture.received_at_ms,
+          targetLanguage,
+        );
+      }
     } finally {
       setRunning(false);
     }
@@ -976,11 +1332,11 @@ function App() {
       setError('The captured job is unavailable. Capture the job again.');
       return;
     }
-    setPreflightCollapsed(true);
+    setWorkflowPhase('tailoring');
     setRunning(true);
     setError('');
     setResult(null);
-    setProgressEvents([]);
+    setProgressEvents(INITIAL_TAILORING_PROGRESS);
     const selectedEvidence = preflight.items
       .filter(
         (item) => item.source !== 'base_resume' && selected.has(item.term),
@@ -989,6 +1345,7 @@ function App() {
         term: item.term,
         kind: item.kind,
         proof_note: proofs[item.term]?.trim() || null,
+        allow_model_role_placement: item.allow_model_role_placement,
       }));
     console.info('[ui-result] tailoring command started', {
       captureId: captureRef.current?.received_at_ms,
@@ -1010,30 +1367,155 @@ function App() {
         changes: resume.content_changes.length,
       });
       acceptResult(
-        {
+        localOutcome({
+          captureId: commandCaptureId,
+          language,
           analysis: preflight.analysis,
           resume,
-          recovered_from_artifacts: false,
-        },
+        }),
         'command',
         commandCaptureId,
         language,
       );
+      const currentCapture = captureRef.current;
+      if (currentCapture) {
+        await recoverResultFor(currentCapture, language, 'tailoring-command-resolved');
+      }
       void loadBank();
     } catch (reason) {
       console.error('[ui-result] tailoring command rejected', reason);
-      setError(errorText(reason));
+      const message = errorText(reason);
+      setError(message);
+      setProgressEvents((current) =>
+        current[current.length - 1]?.status === 'failed'
+          ? current
+          : [
+              ...current,
+              {
+                stage: 'resume_tailoring',
+                status: 'failed',
+                message,
+                attempt: null,
+                total_attempts: null,
+              },
+            ],
+      );
       const currentCapture = captureRef.current;
       if (currentCapture) {
-        void recoverResultFor(currentCapture, language, 'command-rejected');
+        const recovered = await recoverResultFor(
+          currentCapture,
+          language,
+          'tailoring-command-rejected',
+        );
+        if (
+          !recovered ||
+          recovered.status !== 'failed' ||
+          recovered.error?.trim() !== message.trim()
+        ) {
+          acceptResult(
+            localOutcome({
+              captureId: currentCapture.received_at_ms,
+              language,
+              analysis: preflight.analysis,
+              error: message,
+              failedStage: 'resume_tailoring',
+            }),
+            'command',
+            currentCapture.received_at_ms,
+            language,
+          );
+        }
       }
     } finally {
       setRunning(false);
     }
   }
-  async function action(command: string) {
+  async function retailorSelectedTerms() {
+    if (!result || !outcome || selectedOmittedTerms.size === 0) return;
+    const sourceResult = result;
+    const sourceOutcome = outcome;
+    const sourceVariantSlug = sourceResult.resume.variant_slug;
+    if (!sourceVariantSlug) {
+      setError('The current result has no saved variant to re-tailor.');
+      return;
+    }
+    const selectedTerms = [...selectedOmittedTerms];
+    const targetLanguage = sourceOutcome.language;
+    const captureId = sourceOutcome.capture_received_at_ms;
+    setWorkflowPhase('tailoring');
+    setRunning(true);
+    setError('');
+    setResult(null);
+    setProgressEvents([
+      INITIAL_TAILORING_PROGRESS[0],
+      {
+        stage: 'resume_tailoring',
+        status: 'started',
+        message: `Starting re-tailoring with ${selectedTerms.length} selected claim${selectedTerms.length === 1 ? '' : 's'}.`,
+        attempt: null,
+        total_attempts: null,
+      },
+    ]);
     try {
-      await invoke(command, { language });
+      const resume = await invoke<ResumeResult>('retailor_resume_with_evidence', {
+        request: {
+          capture_id: captureId,
+          language: targetLanguage,
+          source_variant_slug: sourceVariantSlug,
+          selected_terms: selectedTerms,
+        },
+      });
+      acceptResult(
+        localOutcome({
+          captureId,
+          language: targetLanguage,
+          analysis: sourceResult.analysis,
+          resume,
+        }),
+        'command',
+        captureId,
+        targetLanguage,
+      );
+      const currentCapture = captureRef.current;
+      if (currentCapture) {
+        await recoverResultFor(
+          currentCapture,
+          targetLanguage,
+          'retailoring-command-resolved',
+        );
+      }
+      void loadBank();
+    } catch (reason) {
+      const message = errorText(reason);
+      console.error('[ui-result] re-tailoring command rejected', reason);
+      setError(`Re-tailoring failed: ${message}`);
+      setProgressEvents((current) => [
+        ...current,
+        {
+          stage: 'resume_tailoring',
+          status: 'failed',
+          message,
+          attempt: null,
+          total_attempts: null,
+        },
+      ]);
+      setResult(sourceResult);
+      setOutcome(sourceOutcome);
+      setWorkflowPhase('job');
+    } finally {
+      setRunning(false);
+    }
+  }
+  async function action(
+    command: string,
+    variantSlug?: string,
+    format?: 'pdf' | 'docx',
+  ) {
+    try {
+      await invoke(
+        command,
+        variantSlug && format ? { variantSlug, format } : { language },
+      );
     } catch (reason) {
       setError(errorText(reason));
     }
@@ -1047,16 +1529,55 @@ function App() {
       setError(errorText(reason));
     }
   }
-  function changeLanguage(next: Language) {
+  async function changeLanguage(next: Language) {
+    if (next === language || languageChanging || !preflight) return;
+    const previous = language;
+    const currentAnalysis = preflight.analysis;
+    const currentCapture = captureRef.current;
+    if (!currentCapture) {
+      setError('The captured job is unavailable. Capture the job again.');
+      return;
+    }
     languageRef.current = next;
     setLanguage(next);
-    setPreflight(null);
-    setPreflightCollapsed(false);
-    setSelected(new Set());
-    setProofs({});
+    setLanguageChanging(true);
+    setError('');
     setResult(null);
-    const currentCapture = captureRef.current;
-    if (currentCapture) void recoverResultFor(currentCapture, next, 'language-change');
+    setWorkflowPhase('job');
+    setProgressEvents([]);
+    try {
+      const prepared = await invoke<PreflightResult>(
+        'prepare_evidence_preflight',
+        { language: next, analysis: currentAnalysis },
+      );
+      applyPreflight(prepared);
+      acceptResult(
+        localOutcome({
+          captureId: currentCapture.received_at_ms,
+          language: next,
+          analysis: prepared.analysis,
+        }),
+        'command',
+        currentCapture.received_at_ms,
+        next,
+      );
+    } catch (reason) {
+      languageRef.current = previous;
+      setLanguage(previous);
+      acceptResult(
+        localOutcome({
+          captureId: currentCapture.received_at_ms,
+          language: previous,
+          analysis: currentAnalysis,
+        }),
+        'command',
+        currentCapture.received_at_ms,
+        previous,
+      );
+      setError(`Output language could not be changed: ${errorText(reason)}`);
+    } finally {
+      setLanguageChanging(false);
+    }
   }
   const job = capture?.parsed;
   return (
@@ -1075,15 +1596,34 @@ function App() {
           {error}
         </p>
       )}
+      {outcome && (
+        <div ref={summaryRef} tabIndex={-1} className='scroll-mt-4 outline-none'>
+          <RunSummaryPanel outcome={outcome} />
+        </div>
+      )}
       {result ? (
         <section data-testid='completion-screen'>
-          <div ref={resultRef}>
-            <ResultPanel result={result} action={action} />
-          </div>
+          <ResultPanel
+            result={result}
+            action={action}
+            selectedOmittedTerms={selectedOmittedTerms}
+            onToggleOmittedTerm={(term) =>
+              setSelectedOmittedTerms((current) => {
+                const next = new Set(current);
+                next.has(term) ? next.delete(term) : next.add(term);
+                return next;
+              })
+            }
+            onRetailor={() => void retailorSelectedTerms()}
+            retailoring={running}
+          />
           <div className='mt-4 flex flex-wrap gap-2.5'>
             <button
               className={secondaryButtonClass}
-              onClick={() => setResult(null)}
+              onClick={() => {
+                setResult(null);
+                setWorkflowPhase('job');
+              }}
             >
               Back to captured job
             </button>
@@ -1097,6 +1637,24 @@ function App() {
             </details>
           )}
         </section>
+      ) : workflowPhase === 'tailoring' && job ? (
+        <div
+          ref={pipelineRef}
+          tabIndex={-1}
+          className='scroll-mt-4 outline-none'
+        >
+          <FocusedPipeline
+            job={job}
+            language={language}
+            bulletKeywordEmphasis={bulletKeywordEmphasis}
+            events={progressEvents}
+            running={running}
+            onBack={() => {
+              setWorkflowPhase('job');
+              setProgressEvents([]);
+            }}
+          />
+        </div>
       ) : !job ? (
         <section className={`${panelClass} max-w-[650px]`}>
           <h2 className='mb-2 text-[22px] font-bold'>
@@ -1134,34 +1692,44 @@ function App() {
               </p>
             </div>
             <div className='flex flex-wrap items-start gap-2.5 max-[680px]:w-full'>
-              <div
-                className='flex overflow-hidden rounded-lg border border-[#cbd4cc] self-center'
-                role='group'
-                aria-label='Resume language'
-              >
-                <button
-                  className={`cursor-pointer border-0 px-[13px] py-[11px] font-bold ${
-                    language === 'en'
-                      ? 'bg-[#e7f1ea] text-[#12673d]'
-                      : 'bg-white text-[#19221d]'
-                  } disabled:cursor-wait disabled:opacity-65`}
-                  disabled={running}
-                  onClick={() => changeLanguage('en')}
-                >
-                  EN
-                </button>
-                <button
-                  className={`cursor-pointer border-0 border-l border-[#cbd4cc] px-[13px] py-[11px] font-bold ${
-                    language === 'fr'
-                      ? 'bg-[#e7f1ea] text-[#12673d]'
-                      : 'bg-white text-[#19221d]'
-                  } disabled:cursor-wait disabled:opacity-65`}
-                  disabled={running}
-                  onClick={() => changeLanguage('fr')}
-                >
-                  FR
-                </button>
-              </div>
+              {preflight && (
+                <div className='grid gap-1 pt-2'>
+                  <span className='text-[11px] font-bold text-[#526259]'>
+                    Resume output language
+                  </span>
+                  <div
+                    className='flex overflow-hidden rounded-lg border border-[#cbd4cc] self-center'
+                    role='group'
+                    aria-label='Resume output language'
+                  >
+                    <button
+                      className={`cursor-pointer border-0 px-[13px] py-[11px] font-bold ${
+                        language === 'en'
+                          ? 'bg-[#e7f1ea] text-[#12673d]'
+                          : 'bg-white text-[#19221d]'
+                      } disabled:cursor-wait disabled:opacity-65`}
+                      disabled={running || languageChanging}
+                      onClick={() => void changeLanguage('en')}
+                    >
+                      EN
+                    </button>
+                    <button
+                      className={`cursor-pointer border-0 border-l border-[#cbd4cc] px-[13px] py-[11px] font-bold ${
+                        language === 'fr'
+                          ? 'bg-[#e7f1ea] text-[#12673d]'
+                          : 'bg-white text-[#19221d]'
+                      } disabled:cursor-wait disabled:opacity-65`}
+                      disabled={running || languageChanging}
+                      onClick={() => void changeLanguage('fr')}
+                    >
+                      FR
+                    </button>
+                  </div>
+                  <small className='max-w-[245px] text-[11px] leading-tight text-[#627067]'>
+                    Used for evidence matching and the tailored resume output.
+                  </small>
+                </div>
+              )}
               {preflight && (
                 <div className='grid gap-1 pt-2'>
                   <span className='text-[11px] font-bold text-[#526259]'>
@@ -1181,7 +1749,7 @@ function App() {
                             ? 'bg-[#e7f1ea] text-[#12673d]'
                             : 'bg-white text-[#19221d]'
                         } disabled:cursor-wait disabled:opacity-65`}
-                        disabled={running}
+                        disabled={running || languageChanging}
                         key={level}
                         onClick={() => setBulletKeywordEmphasis(level)}
                       >
@@ -1197,10 +1765,12 @@ function App() {
               )}
               <button
                 className={primaryButtonClass}
-                disabled={running}
+                disabled={running || languageChanging}
                 onClick={preflight ? generate : analyze}
               >
-                {running
+                {languageChanging
+                  ? 'Preparing language...'
+                  : running
                   ? 'Working...'
                   : preflight
                     ? 'Generate tailored PDF'
@@ -1208,16 +1778,6 @@ function App() {
               </button>
             </div>
           </section>
-          {preflight && (
-            <section className={compactPanelClass} aria-live='polite'>
-              <p className={eyebrowClass}>ATS ANALYSIS SUMMARY</p>
-              <p className='mt-2 mb-0'>{preflight.analysis.summary}</p>
-              <small className='mt-2 block text-xs text-[#627067]'>
-                The ATS score and exact JSON changes will appear here after
-                tailoring, even if document generation does not complete.
-              </small>
-            </section>
-          )}
           {preflight &&
             (preflightCollapsed ? (
               <PreflightSummary
@@ -1247,7 +1807,7 @@ function App() {
           )}
         </>
       )}
-      {!result && bank && bank.entries.length > 0 && (
+      {workflowPhase === 'job' && !result && bank && bank.entries.length > 0 && (
         <details className={compactPanelClass}>
           <summary className='cursor-pointer list-none [&::-webkit-details-marker]:hidden'>
             <span className='flex items-center justify-between gap-4'>
@@ -1284,8 +1844,11 @@ function App() {
   );
 }
 
-createRoot(document.getElementById('root')!).render(
-  <AppErrorBoundary>
-    <App />
-  </AppErrorBoundary>,
-);
+const rootElement = document.getElementById('root');
+if (rootElement) {
+  createRoot(rootElement).render(
+    <AppErrorBoundary>
+      <App />
+    </AppErrorBoundary>,
+  );
+}

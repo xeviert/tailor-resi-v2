@@ -1,5 +1,9 @@
 use crate::analysis::{analyze_job, AnalysisConfig, JobAnalysis};
-use crate::tailoring::{failed_response, tailor_and_render, BulletKeywordEmphasis, TailorRequest, TailorResponse};
+use crate::commands::{failure_summary, store_and_emit_outcome};
+use crate::tailoring::{
+    failed_response, tailor_and_render, workspace_root, BulletKeywordEmphasis, TailorRequest,
+    TailorResponse,
+};
 use axum::{
     extract::State,
     http::{Method, StatusCode},
@@ -405,7 +409,8 @@ async fn health_handler() -> Json<serde_json::Value> {
     Json(serde_json::json!({
         "status": "ok",
         "app": "resi-tailor",
-        "bridge": "tauri-rust"
+        "bridge": "tauri-rust",
+        "result_protocol_version": 2
     }))
 }
 
@@ -439,10 +444,62 @@ async fn analyze_handler(
     State(state): State<AppState>,
     Json(payload): Json<serde_json::Value>,
 ) -> (StatusCode, Json<AnalyzeResponse>) {
-    let parsed = parse_job_data(&payload);
-    if let Err(e) = state.app_handle.emit("job-data-received", &parsed) {
+    let parsed_fallback = parse_job_data(&payload);
+    let captured = match persist_capture(&payload) {
+        Ok(captured) => captured,
+        Err(error) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(AnalyzeResponse {
+                    success: false,
+                    message: "Job data could not be persisted",
+                    parsed: parsed_fallback,
+                    analysis_status: "failed",
+                    analysis: None,
+                    analysis_error: Some(error),
+                    tailoring_status: "not_run",
+                    variant_slug: None,
+                    variant_json_path: None,
+                    docx_path: None,
+                    report_json_path: None,
+                    validation_status: "not_run",
+                    fit_status: "not_run",
+                    page_count: None,
+                    tailoring_error: None,
+                }),
+            );
+        }
+    };
+    let parsed = captured.parsed.clone();
+    if let Err(e) = state.app_handle.emit("job-data-received", &captured) {
         eprintln!("[server] Failed to emit event: {e}");
     }
+    let capture_id = match u64::try_from(captured.received_at_ms) {
+        Ok(capture_id) => capture_id,
+        Err(_) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(AnalyzeResponse {
+                    success: false,
+                    message: "Job data received",
+                    parsed,
+                    analysis_status: "failed",
+                    analysis: None,
+                    analysis_error: Some("Capture timestamp is out of range.".to_string()),
+                    tailoring_status: "not_run",
+                    variant_slug: None,
+                    variant_json_path: None,
+                    docx_path: None,
+                    report_json_path: None,
+                    validation_status: "not_run",
+                    fit_status: "not_run",
+                    page_count: None,
+                    tailoring_error: None,
+                }),
+            );
+        }
+    };
+    let root = workspace_root().ok();
 
     let (analysis_status, analysis, analysis_error) = match AnalysisConfig::from_env() {
         Some(config) => match analyze_job(&config, &parsed).await {
@@ -457,15 +514,66 @@ async fn analyze_handler(
                 {
                     eprintln!("[server] Failed to emit analysis event: {e}");
                 }
+                if let Some(root) = root.as_ref() {
+                    if let Err(error) = store_and_emit_outcome(
+                        &state.app_handle,
+                        root,
+                        capture_id,
+                        "en",
+                        "analysis_ready",
+                        analysis.summary.clone(),
+                        Some(&analysis),
+                        None,
+                        None,
+                        None,
+                    ) {
+                        eprintln!("[pipeline-result] HTTP analysis outcome failed: {error}");
+                    }
+                }
                 ("completed", Some(analysis), None)
             }
             Err(error) => {
                 let message = error.to_string();
                 eprintln!("[analysis] {message}");
+                if let Some(root) = root.as_ref() {
+                    if let Err(error) = store_and_emit_outcome(
+                        &state.app_handle,
+                        root,
+                        capture_id,
+                        "en",
+                        "failed",
+                        failure_summary("ats_analysis", &message, None),
+                        None,
+                        None,
+                        Some("ats_analysis"),
+                        Some(message.clone()),
+                    ) {
+                        eprintln!("[pipeline-result] HTTP failure outcome failed: {error}");
+                    }
+                }
                 ("failed", None, Some(message))
             }
         },
-        None => ("skipped_no_api_key", None, None),
+        None => {
+            let message = "OPENAI_API_KEY is required to analyze and tailor a resume.".to_string();
+            if let Some(root) = root.as_ref() {
+                if let Err(error) = store_and_emit_outcome(
+                    &state.app_handle,
+                    root,
+                    capture_id,
+                    "en",
+                    "failed",
+                    failure_summary("ats_analysis", &message, None),
+                    None,
+                    None,
+                    Some("ats_analysis"),
+                    Some(message.clone()),
+                ) {
+                    eprintln!("[pipeline-result] HTTP failure outcome failed: {error}");
+                }
+            }
+            ("skipped_no_api_key", None, Some(message))
+        }
     };
 
     let (
@@ -483,12 +591,29 @@ async fn analyze_handler(
             let request = TailorRequest {
                 language: "en".to_string(),
                 parsed: parsed.clone(),
-                analysis,
+                analysis: analysis.clone(),
                 approved_evidence: vec![],
+                priority_attested_terms: vec![],
                 bullet_keyword_emphasis: BulletKeywordEmphasis::Balanced,
             };
             match tailor_and_render(request).await {
                 Ok(response) => {
+                    if let Some(root) = root.as_ref() {
+                        if let Err(error) = store_and_emit_outcome(
+                            &state.app_handle,
+                            root,
+                            capture_id,
+                            "en",
+                            response.tailoring_status,
+                            analysis.summary.clone(),
+                            Some(&analysis),
+                            Some(&response),
+                            (response.tailoring_status == "failed").then_some("resume_tailoring"),
+                            response.error.clone(),
+                        ) {
+                            eprintln!("[pipeline-result] HTTP tailoring outcome failed: {error}");
+                        }
+                    }
                     if let Err(e) = state.app_handle.emit("resume-tailored", &response) {
                         eprintln!("[server] Failed to emit resume-tailored event: {e}");
                     }
@@ -507,6 +632,25 @@ async fn analyze_handler(
                 Err(error) => {
                     let message = error.to_string();
                     eprintln!("[tailoring] {message}");
+                    let response = failed_response(message.clone());
+                    if let Some(root) = root.as_ref() {
+                        if let Err(error) = store_and_emit_outcome(
+                            &state.app_handle,
+                            root,
+                            capture_id,
+                            "en",
+                            "failed",
+                            failure_summary("resume_tailoring", &message, Some(&analysis)),
+                            Some(&analysis),
+                            Some(&response),
+                            Some("resume_tailoring"),
+                            Some(message.clone()),
+                        ) {
+                            eprintln!(
+                                "[pipeline-result] HTTP tailoring failure outcome failed: {error}"
+                            );
+                        }
+                    }
                     (
                         "failed",
                         None,
@@ -802,7 +946,9 @@ mod tests {
     fn blank_or_invalid_latest_capture_is_treated_as_missing() {
         assert!(parse_latest_capture(" \n\t ").unwrap().is_none());
         assert!(parse_latest_capture("not json").is_err());
-        assert!(parse_latest_capture(r#"{"receivedAt":"2026-08-14T12:33:44Z","json":{}}"#).is_err());
+        assert!(
+            parse_latest_capture(r#"{"receivedAt":"2026-08-14T12:33:44Z","json":{}}"#).is_err()
+        );
     }
 
     #[test]

@@ -1,4 +1,5 @@
 mod analysis;
+mod api_usage;
 mod commands;
 mod config;
 mod error;
@@ -22,14 +23,18 @@ pub fn run() {
             commands::get_latest_pipeline_result_any_language,
             commands::record_ui_result_state,
             commands::analyze_latest_job,
+            commands::prepare_evidence_preflight,
             commands::generate_tailored_resume,
+            commands::retailor_resume_with_evidence,
             commands::get_evidence_bank,
             commands::remove_evidence_bank_entry,
             commands::run_resume_pipeline,
             commands::open_latest_pdf,
             commands::reveal_latest_pdf,
             commands::open_latest_docx,
-            commands::reveal_latest_docx
+            commands::reveal_latest_docx,
+            commands::open_result_artifact,
+            commands::reveal_result_artifact
         ])
         .setup(|app| {
             // Auto-open DevTools in debug builds
