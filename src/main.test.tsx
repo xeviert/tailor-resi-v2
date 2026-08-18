@@ -3,7 +3,14 @@
 import '@testing-library/jest-dom/vitest';
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { localOutcome, normalizeOutcome, ResultPanel, RunSummaryPanel } from './main';
+import {
+  detectLanguage,
+  localOutcome,
+  normalizeOutcome,
+  outcomeSignature,
+  ResultPanel,
+  RunSummaryPanel,
+} from './main';
 
 afterEach(cleanup);
 
@@ -177,5 +184,82 @@ describe('always-visible run summary', () => {
     expect(screen.getByTestId('retailor-score-delta')).toHaveTextContent(
       'Previous 73 → current 81 (+8)',
     );
+  });
+});
+
+describe('output language auto-detection', () => {
+  // Welcome to the Jungle emits `description_html` and no plain `description`, and its
+  // titles are frequently English even on a French posting. Reading only title +
+  // description scored 0 French / 0 English and silently fell through to 'en'.
+  it('detects French from description_html when there is no plain description', () => {
+    expect(
+      detectLanguage({
+        title: 'Senior Product & Software Engineer',
+        description_html:
+          '<h3><strong>Notre équipe</strong></h3><p>Plus de 90 ingénieurs issus des meilleures écoles.</p>' +
+          '<p>Tu apprendras à concevoir et développer des services pour nos clients.</p>',
+        qualifications:
+          'Nous recherchons une personne avec au moins 4 ans d’expérience.',
+      }),
+    ).toBe('fr');
+  });
+
+  it('detects French from qualifications alone', () => {
+    expect(
+      detectLanguage({
+        title: 'Software Engineer',
+        qualifications:
+          'Nous recherchons une personne avec au moins 4 ans d’expérience en tant que développeur.',
+      }),
+    ).toBe('fr');
+  });
+
+  it('keeps English for an English posting', () => {
+    expect(
+      detectLanguage({
+        title: 'Senior Backend Engineer',
+        description:
+          'We are looking for an engineer with strong experience in Rust. You will join our platform team and own the requirements for our services.',
+      }),
+    ).toBe('en');
+  });
+
+  it('keeps English for an English description_html posting', () => {
+    expect(
+      detectLanguage({
+        title: 'Backend Engineer',
+        description_html:
+          '<p>You will work with our team on the requirements and responsibilities for the platform.</p>',
+      }),
+    ).toBe('en');
+  });
+
+  it('falls back to English when there is no signal at all', () => {
+    expect(detectLanguage(undefined)).toBe('en');
+    expect(detectLanguage({})).toBe('en');
+    expect(detectLanguage({ title: '' })).toBe('en');
+  });
+});
+
+describe('outcomeSignature', () => {
+  it('matches payloads describing the same run and differs when the run moves on', () => {
+    const stored = localOutcome({
+      captureId: 1,
+      language: 'en',
+      analysis,
+      resume: completedResume(),
+    });
+    // The event, the command reply and the disk re-read each allocate a fresh object.
+    expect(outcomeSignature({ ...stored })).toBe(outcomeSignature(stored));
+    expect(
+      outcomeSignature(
+        localOutcome({ captureId: 1, language: 'en', analysis }),
+      ),
+    ).not.toBe(outcomeSignature(stored));
+    expect(
+      outcomeSignature(
+        localOutcome({ captureId: 2, language: 'en', analysis, resume: completedResume() }),
+      ),
+    ).not.toBe(outcomeSignature(stored));
   });
 });

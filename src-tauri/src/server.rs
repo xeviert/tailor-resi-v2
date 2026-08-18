@@ -169,6 +169,77 @@ fn parse_wellfound(payload: &serde_json::Value) -> serde_json::Value {
     })
 }
 
+/// Convert an HTML fragment to plain text.
+///
+/// Job boards differ on which field carries the posting body: `parse_wttj` receives
+/// `description` as HTML, while the other parsers receive it as plain text. Stripping
+/// here lets every parser emit a plain `description` so downstream consumers (language
+/// detection, analysis prompts) can rely on one field.
+fn html_to_text(html: &str) -> String {
+    let mut text = String::with_capacity(html.len());
+    let mut in_tag = false;
+    let mut entity: Option<String> = None;
+    for character in html.chars() {
+        match character {
+            '<' => {
+                in_tag = true;
+                // Block boundaries must not glue neighbouring words together.
+                text.push(' ');
+            }
+            '>' if in_tag => in_tag = false,
+            _ if in_tag => {}
+            '&' => entity = Some(String::new()),
+            ';' if entity.is_some() => {
+                let name = entity.take().unwrap_or_default();
+                text.push_str(decode_entity(&name));
+            }
+            _ => match entity.as_mut() {
+                // Entity names are short; anything longer is a stray ampersand.
+                Some(name) if name.len() < 12 => name.push(character),
+                Some(_) => {
+                    let name = entity.take().unwrap_or_default();
+                    text.push('&');
+                    text.push_str(&name);
+                    text.push(character);
+                }
+                None => text.push(character),
+            },
+        }
+    }
+    if let Some(name) = entity {
+        text.push('&');
+        text.push_str(&name);
+    }
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+fn decode_entity(name: &str) -> &'static str {
+    match name {
+        "amp" => "&",
+        "lt" => "<",
+        "gt" => ">",
+        "quot" => "\"",
+        "apos" | "#39" => "'",
+        "nbsp" | "#160" => " ",
+        "rsquo" | "#8217" => "\u{2019}",
+        "lsquo" | "#8216" => "\u{2018}",
+        "ldquo" | "#8220" => "\u{201C}",
+        "rdquo" | "#8221" => "\u{201D}",
+        "hellip" | "#8230" => "\u{2026}",
+        "ndash" | "#8211" => "\u{2013}",
+        "mdash" | "#8212" => "\u{2014}",
+        "eacute" => "\u{e9}",
+        "egrave" => "\u{e8}",
+        "agrave" => "\u{e0}",
+        "ccedil" => "\u{e7}",
+        "ocirc" => "\u{f4}",
+        "icirc" => "\u{ee}",
+        "ecirc" => "\u{ea}",
+        "ugrave" => "\u{f9}",
+        _ => "",
+    }
+}
+
 fn parse_wttj(payload: &serde_json::Value) -> serde_json::Value {
     let job = &payload["json"];
     let org = &job["hiringOrganization"];
@@ -220,6 +291,7 @@ fn parse_wttj(payload: &serde_json::Value) -> serde_json::Value {
 
     let title = job["title"].as_str().unwrap_or("");
     let description_html = job["description"].as_str().unwrap_or("");
+    let description = html_to_text(description_html);
     let company = org["name"].as_str().unwrap_or("");
 
     if title.is_empty() {
@@ -240,6 +312,7 @@ fn parse_wttj(payload: &serde_json::Value) -> serde_json::Value {
         "parsed": true,
         "url": payload["sourceUrl"].as_str().unwrap_or(""),
         "title": title,
+        "description": description,
         "description_html": description_html,
         "qualifications": job["qualifications"].as_str(),
         "job_type": job_type,
@@ -819,7 +892,9 @@ pub async fn start_server(app_handle: AppHandle) {
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_job_data, parse_latest_capture, write_latest_capture, CapturedJob};
+    use super::{
+        html_to_text, parse_job_data, parse_latest_capture, write_latest_capture, CapturedJob,
+    };
     use serde_json::json;
     use std::{
         fs,
@@ -914,6 +989,23 @@ mod tests {
         assert_eq!(parsed["company"], "Acme");
         assert_eq!(parsed["locations"][0], "Paris, France");
         assert_eq!(parsed["industry_tags"][1], "AI");
+        // Every parser must emit a plain-text description, not just the HTML variant.
+        assert_eq!(parsed["description"], "Build services.");
+        assert_eq!(parsed["description_html"], "<p>Build services.</p>");
+    }
+
+    #[test]
+    fn html_to_text_strips_tags_and_decodes_entities() {
+        assert_eq!(
+            html_to_text("<h3><strong>Notre &eacute;quipe</strong></h3><p>90 ing&eacute;nieurs</p>"),
+            "Notre \u{e9}quipe 90 ing\u{e9}nieurs"
+        );
+        // Adjacent block elements must not glue words together.
+        assert_eq!(html_to_text("<li>Rust</li><li>Axum</li>"), "Rust Axum");
+        assert_eq!(html_to_text("R&amp;D at 100&nbsp;%"), "R&D at 100 %");
+        // A stray ampersand is preserved rather than swallowed as an entity.
+        assert_eq!(html_to_text("salary & bonus"), "salary & bonus");
+        assert_eq!(html_to_text(""), "");
     }
 
     #[test]

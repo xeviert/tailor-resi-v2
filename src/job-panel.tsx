@@ -1,4 +1,4 @@
-import { Fragment, type ReactNode } from 'react';
+import { Fragment, memo, type ReactNode, useMemo } from 'react';
 
 export type JobData = Record<string, unknown>;
 
@@ -113,15 +113,17 @@ function renderHtmlNode(node: Node, key: string): ReactNode {
 
 function RichDescription({ html, text }: { html?: unknown; text?: unknown }) {
   const markup = string(html);
-  if (!markup) return <p>{string(text)}</p>;
-  const document = new DOMParser().parseFromString(markup, 'text/html');
-  return (
-    <>
-      {Array.from(document.body.childNodes).map((node, index) =>
-        renderHtmlNode(node, `description-${index}`),
-      )}
-    </>
-  );
+  // Job descriptions run to several kilobytes of HTML. Without memoising, every App
+  // render reparses the markup and rebuilds this entire subtree, which reads as a flicker.
+  const nodes = useMemo(() => {
+    if (!markup) return null;
+    const parsed = new DOMParser().parseFromString(markup, 'text/html');
+    return Array.from(parsed.body.childNodes).map((node, index) =>
+      renderHtmlNode(node, `description-${index}`),
+    );
+  }, [markup]);
+  if (!nodes) return <p>{string(text)}</p>;
+  return <>{nodes}</>;
 }
 
 function Header({ job, children }: { job: JobData; children?: ReactNode }) {
@@ -296,7 +298,9 @@ function GenericJob({ job }: { job: JobData }) {
   );
 }
 
-export function JobPanel({ job }: { job: JobData }) {
+// `job` is a stable object identity for the lifetime of a capture, so memoising here
+// keeps the whole panel out of the re-render path while a run is in progress.
+export const JobPanel = memo(function JobPanel({ job }: { job: JobData }) {
   switch (string(job.domain)) {
     case 'welcometothejungle':
       return <WelcomeToTheJungleJob job={job} />;
@@ -307,4 +311,4 @@ export function JobPanel({ job }: { job: JobData }) {
     default:
       return <GenericJob job={job} />;
   }
-}
+});

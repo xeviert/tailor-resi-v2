@@ -3,9 +3,10 @@ import { listen } from '@tauri-apps/api/event';
 import {
   Component,
   type ErrorInfo,
+  memo,
   type ReactNode,
   useEffect,
-  useLayoutEffect,
+  useMemo,
   useRef,
   useState,
 } from 'react';
@@ -65,7 +66,27 @@ type ResumeResult = {
   retailor?: RetailorMetadata | null;
   error: string | null;
 };
-type Analysis = { summary: string };
+type KeywordSignal = {
+  term: string;
+  category: string;
+  importance: number;
+  evidence: string;
+};
+type JobAnalysis = {
+  role_target: string;
+  seniority: string;
+  core_keywords: KeywordSignal[];
+  required_skills: string[];
+  preferred_skills: string[];
+  tools_and_platforms: string[];
+  domain_terms: string[];
+  responsibility_phrases: string[];
+  achievement_angles: string[];
+  ats_phrase_bank: string[];
+  must_not_claim_without_evidence: string[];
+  summary: string;
+};
+type Analysis = JobAnalysis | { summary: string };
 type ResultSource = 'command' | 'event' | 'recovery';
 type RunStatus = 'analysis_ready' | 'completed' | 'partial' | 'failed';
 type PipelineResult = {
@@ -93,10 +114,7 @@ type PreflightItem = {
   kind: EvidenceKind;
   importance: number;
   source: 'base_resume' | 'evidence_bank' | 'needs_approval';
-  resolution:
-    | 'auto_available'
-    | 'confirmation_required'
-    | 'auto_omitted';
+  resolution: 'auto_available' | 'confirmation_required' | 'auto_omitted';
   resolution_reason: string;
   matched_term: string | null;
   proof_note: string | null;
@@ -120,6 +138,7 @@ type PipelineProgress = {
   total_attempts: number | null;
 };
 type WorkflowPhase = 'job' | 'tailoring';
+type Screen = 'empty' | 'review' | 'pipeline' | 'completion';
 const BRIDGE_HEALTH_URL = 'http://127.0.0.1:3000/health';
 const PIPELINE_STAGES = [
   ['ats_analysis', 'ATS analysis'],
@@ -159,7 +178,11 @@ class AppErrorBoundary extends Component<
   }
 
   componentDidCatch(error: Error, info: ErrorInfo) {
-    console.error('[ui-result] React render failure', error, info.componentStack);
+    console.error(
+      '[ui-result] React render failure',
+      error,
+      info.componentStack,
+    );
   }
 
   render() {
@@ -240,7 +263,67 @@ function errorText(reason: unknown) {
   }
 }
 
-export function normalizeOutcome(candidate: StoredPipelineResult): StoredPipelineResult {
+// Accented characters carry the signal for words like "expérience" or "responsabilités";
+// matching them as a character class avoids the \b pitfall that accented letters are not
+// word characters, so /\bêtre\b/ never matches " être ".
+const FRENCH_SIGNALS =
+  /[éèêëàâçùûôîïœ]|\b(vous|nous|votre|notre|nos|poste|le|la|les|des|une|pour|avec|dans|est|au|du|sur|et|en|par|qui|que|plus)\b/g;
+const ENGLISH_SIGNALS =
+  /\b(the|and|you|your|our|we|are|will|with|for|team|experience|requirements|responsibilities|skills)\b/g;
+
+function plainText(html: string) {
+  if (!html) return '';
+  return (
+    new DOMParser().parseFromString(html, 'text/html').body.textContent ?? ''
+  );
+}
+
+export function detectLanguage(
+  job: Record<string, unknown> | undefined,
+): Language {
+  const read = (key: string) =>
+    typeof job?.[key] === 'string' ? (job[key] as string) : '';
+  // Job boards disagree on which field carries the posting body: most emit `description`,
+  // Welcome to the Jungle emits `description_html`. Sample every candidate so detection
+  // never degrades to the title alone, which is often English even on a French post.
+  const text = [
+    read('title'),
+    read('description'),
+    plainText(read('description_html')),
+    read('qualifications'),
+  ]
+    .join(' ')
+    .toLowerCase();
+  const frSignals = (text.match(FRENCH_SIGNALS) ?? []).length;
+  const enSignals = (text.match(ENGLISH_SIGNALS) ?? []).length;
+  if (frSignals > enSignals) return 'fr';
+  if (enSignals > frSignals) return 'en';
+  // No decisive signal, usually an empty or unparsed capture. English stays the default.
+  return 'en';
+}
+
+// Identity of a run's reported state. Two payloads with the same signature describe the
+// same outcome even though the event, the command reply and the disk re-read each hand us
+// a freshly allocated object.
+export function outcomeSignature(candidate: StoredPipelineResult) {
+  return JSON.stringify([
+    candidate.capture_received_at_ms,
+    candidate.language,
+    candidate.status ?? null,
+    candidate.failed_stage ?? null,
+    candidate.error ?? null,
+    candidate.summary ?? null,
+    candidate.resume?.tailoring_status ?? null,
+    candidate.resume?.variant_slug ?? null,
+    candidate.resume?.report?.estimated_ats_coverage_score ?? null,
+    candidate.resume?.content_changes?.length ?? null,
+    candidate.analysis ? Object.keys(candidate.analysis).length : null,
+  ]);
+}
+
+export function normalizeOutcome(
+  candidate: StoredPipelineResult,
+): StoredPipelineResult {
   const analysisSummary = candidate.analysis?.summary?.trim();
   const errorMessage = candidate.error?.trim();
   const summary =
@@ -273,13 +356,13 @@ export function localOutcome({
 }): StoredPipelineResult {
   const status: RunStatus = error
     ? 'failed'
-    : resume?.tailoring_status ?? 'analysis_ready';
+    : (resume?.tailoring_status ?? 'analysis_ready');
   const stage = failedStage?.replace(/_/g, ' ') ?? 'processing';
   const summary = error
     ? analysis
       ? `${analysis.summary} The run then failed during ${stage}: ${error}`
       : `No AI analysis was produced. The run failed during ${stage}: ${error}`
-    : analysis?.summary ?? 'This run finished without an analysis summary.';
+    : (analysis?.summary ?? 'This run finished without an analysis summary.');
   return {
     schema_version: 2,
     capture_received_at_ms: captureId,
@@ -295,7 +378,7 @@ export function localOutcome({
   };
 }
 
-function ProgressPanel({
+const ProgressPanel = memo(function ProgressPanel({
   events,
   running,
 }: {
@@ -303,6 +386,13 @@ function ProgressPanel({
   running: boolean;
 }) {
   const latest = events[events.length - 1];
+  // One pass over the events instead of a reversed copy per stage; `events` grows for
+  // the whole run and this panel re-renders on every progress message.
+  const statusByStage = useMemo(() => {
+    const byStage = new Map<string, PipelineProgress['status']>();
+    for (const event of events) byStage.set(event.stage, event.status);
+    return byStage;
+  }, [events]);
   return (
     <section className={compactPanelClass} aria-live='polite'>
       <div className='flex items-center justify-between gap-5'>
@@ -325,10 +415,7 @@ function ProgressPanel({
       </div>
       <ol className='mt-[22px] mb-4 grid list-none grid-cols-7 gap-2 p-0 max-[820px]:grid-cols-2 max-[820px]:gap-3 max-[480px]:grid-cols-1'>
         {PIPELINE_STAGES.map(([stage, label]) => {
-          const event = [...events]
-            .reverse()
-            .find((candidate) => candidate.stage === stage);
-          const status = event?.status ?? 'pending';
+          const status = statusByStage.get(stage) ?? 'pending';
           return (
             <li
               className={`flex items-start gap-[7px] text-xs leading-snug ${progressTextClass[status]}`}
@@ -387,13 +474,13 @@ function ProgressPanel({
       )}
     </section>
   );
-}
+});
 
 function childPath(path: string, key: string | number) {
   return `${path}/${String(key).replace(/~/g, '~0').replace(/\//g, '~1')}`;
 }
 
-function JsonReviewValue({
+const JsonReviewValue = memo(function JsonReviewValue({
   value,
   path,
   changedPaths,
@@ -457,7 +544,7 @@ function JsonReviewValue({
       {JSON.stringify(value)}
     </span>
   );
-}
+});
 
 function TailoringChanges({
   content,
@@ -466,7 +553,10 @@ function TailoringChanges({
   content: unknown;
   changes: ContentChange[];
 }) {
-  const changedPaths = new Set(changes.map((change) => change.path));
+  const changedPaths = useMemo(
+    () => new Set(changes.map((change) => change.path)),
+    [changes],
+  );
   return (
     <details className='col-span-full border-t border-[#e7ebe7] pt-[18px]' open>
       <summary className='cursor-pointer text-[#176a46]'>
@@ -523,7 +613,11 @@ function TailoringChanges({
   );
 }
 
-export function RunSummaryPanel({ outcome }: { outcome: StoredPipelineResult }) {
+export function RunSummaryPanel({
+  outcome,
+}: {
+  outcome: StoredPipelineResult;
+}) {
   const status = outcome.status ?? 'failed';
   const report = outcome.resume?.report ?? null;
   const failed = status === 'failed';
@@ -567,7 +661,10 @@ export function RunSummaryPanel({ outcome }: { outcome: StoredPipelineResult }) 
       </div>
       {report && (
         <div className='min-w-[110px] text-center max-[680px]:text-left'>
-          <strong className='block text-4xl text-[#176a46]' data-testid='run-summary-score'>
+          <strong
+            className='block text-4xl text-[#176a46]'
+            data-testid='run-summary-score'
+          >
             {report.estimated_ats_coverage_score}
           </strong>
           <span className='text-xs text-[#627067]'>estimated ATS coverage</span>
@@ -586,7 +683,11 @@ export function ResultPanel({
   retailoring = false,
 }: {
   result: PipelineResult;
-  action: (command: string, variantSlug?: string, format?: 'pdf' | 'docx') => void;
+  action: (
+    command: string,
+    variantSlug?: string,
+    format?: 'pdf' | 'docx',
+  ) => void;
   selectedOmittedTerms?: Set<string>;
   onToggleOmittedTerm?: (term: string) => void;
   onRetailor?: () => void;
@@ -667,12 +768,14 @@ export function ResultPanel({
         )}
         {partial && resume.docx_open_error && (
           <p className='mt-3.5 mb-0 rounded-lg bg-[#fff6df] px-3 py-2.5 text-[13px] text-[#795b13] [overflow-wrap:anywhere]'>
-            The DOCX was saved but could not be opened automatically: {resume.docx_open_error}
+            The DOCX was saved but could not be opened automatically:{' '}
+            {resume.docx_open_error}
           </p>
         )}
         {partial && resume.downloads_docx_error && (
           <p className='mt-3.5 mb-0 rounded-lg bg-[#fff6df] px-3 py-2.5 text-[13px] text-[#795b13] [overflow-wrap:anywhere]'>
-            The DOCX was saved but could not be copied to Downloads: {resume.downloads_docx_error}
+            The DOCX was saved but could not be copied to Downloads:{' '}
+            {resume.downloads_docx_error}
           </p>
         )}
         {resume.downloads_error && (
@@ -688,7 +791,11 @@ export function ResultPanel({
             className={primaryButtonClass}
             onClick={() => {
               if (resume.variant_slug) {
-                action('open_result_artifact', resume.variant_slug, artifactFormat);
+                action(
+                  'open_result_artifact',
+                  resume.variant_slug,
+                  artifactFormat,
+                );
               } else {
                 action(hasPdf ? 'open_latest_pdf' : 'open_latest_docx');
               }
@@ -700,7 +807,11 @@ export function ResultPanel({
             className={secondaryButtonClass}
             onClick={() => {
               if (resume.variant_slug) {
-                action('reveal_result_artifact', resume.variant_slug, artifactFormat);
+                action(
+                  'reveal_result_artifact',
+                  resume.variant_slug,
+                  artifactFormat,
+                );
               } else {
                 action(hasPdf ? 'reveal_latest_pdf' : 'reveal_latest_docx');
               }
@@ -718,7 +829,10 @@ export function ResultPanel({
             to place each claim in the most plausible existing role and replace
             a lower-value bullet while preserving the locked layout.
           </p>
-          <div className='flex flex-wrap gap-2' aria-label='Omitted ATS phrases'>
+          <div
+            className='flex flex-wrap gap-2'
+            aria-label='Omitted ATS phrases'
+          >
             {omittedKeywords.map((term) => {
               const pressed = selectedOmittedTerms.has(term);
               return (
@@ -822,9 +936,11 @@ function PreflightPanel({
         Confirm only the unresolved claims
       </h2>
       <p className={mutedClass}>
-        {availableCount} supported signal{availableCount === 1 ? ' is' : 's are'}{' '}
-        ready automatically. {omittedCount} lower-value or unsupported signal
-        {omittedCount === 1 ? ' was' : 's were'} omitted without interrupting you.
+        {availableCount} supported signal
+        {availableCount === 1 ? ' is' : 's are'} ready automatically.{' '}
+        {omittedCount} lower-value or unsupported signal
+        {omittedCount === 1 ? ' was' : 's were'} omitted without interrupting
+        you.
       </p>
       {groups.map(([kind, title, hint]) => {
         const items = confirmationItems.filter((item) => item.kind === kind);
@@ -911,7 +1027,8 @@ function PreflightSummary({
         <strong>{approved} supported job signals are available</strong>
         <small className='mt-1 block text-xs font-normal text-[#627067]'>
           {questions} clarification{questions === 1 ? '' : 's'} reviewed ·{' '}
-          {omitted} low-value or unsupported signal{omitted === 1 ? '' : 's'} omitted
+          {omitted} low-value or unsupported signal{omitted === 1 ? '' : 's'}{' '}
+          omitted
         </small>
       </div>
       <button
@@ -976,7 +1093,7 @@ export function App() {
   const [language, setLanguage] = useState<Language>('en');
   const [languageChanging, setLanguageChanging] = useState(false);
   const [bulletKeywordEmphasis, setBulletKeywordEmphasis] =
-    useState<BulletKeywordEmphasis>('balanced');
+    useState<BulletKeywordEmphasis>('high');
   const [workflowPhase, setWorkflowPhase] = useState<WorkflowPhase>('job');
   const [running, setRunning] = useState(false);
   const [error, setError] = useState('');
@@ -995,16 +1112,24 @@ export function App() {
   const pipelineRef = useRef<HTMLDivElement | null>(null);
   const captureRef = useRef<CapturedJob | null>(null);
   const languageRef = useRef<Language>('en');
+  // Every run gets a generation id. The backend emits `resume-pipeline-result` before the
+  // command promise resolves, and recovery re-reads the same snapshot from disk, so results
+  // arrive from three sources with no ordering guarantee. Comparing capture id and language
+  // alone cannot tell a current result from one belonging to an earlier run of the same job.
+  const runIdRef = useRef(0);
+  // Mirrors `preflight` for callbacks created in the mount effect, whose closure would
+  // otherwise capture the initial `null` forever.
+  const preflightRef = useRef<PreflightResult | null>(null);
+  const outcomeSignatureRef = useRef<string | null>(null);
   const loadBank = () =>
     invoke<EvidenceBank>('get_evidence_bank')
       .then(setBank)
       .catch((reason) => setError(errorText(reason)));
   function applyPreflight(next: PreflightResult) {
+    preflightRef.current = next;
     setPreflight(next);
     setPreflightCollapsed(
-      !next.items.some(
-        (item) => item.resolution === 'confirmation_required',
-      ),
+      !next.items.some((item) => item.resolution === 'confirmation_required'),
     );
     setSelected(
       new Set(
@@ -1026,19 +1151,31 @@ export function App() {
     source: ResultSource,
     captureId: number,
     targetLanguage: Language,
+    runId: number = runIdRef.current,
   ) {
     if (
       captureRef.current?.received_at_ms !== captureId ||
-      languageRef.current !== targetLanguage
+      languageRef.current !== targetLanguage ||
+      runId !== runIdRef.current
     ) {
       console.warn('[ui-result] rejected stale result', {
         source,
         captureId,
         targetLanguage,
+        runId,
+        currentRunId: runIdRef.current,
       });
       return false;
     }
     const normalized = normalizeOutcome(candidate);
+    // The same run reports through the event, the command reply and the disk re-read.
+    // Committing each one re-renders the result panels and re-fires the scroll effect,
+    // so ignore a payload that says nothing new.
+    const signature = outcomeSignature(normalized);
+    if (signature === outcomeSignatureRef.current) {
+      console.info('[ui-result] skipped duplicate result', { source, captureId });
+      return true;
+    }
     console.info('[ui-result] accepted result', {
       source,
       captureId,
@@ -1047,6 +1184,7 @@ export function App() {
       score: normalized.resume?.report?.estimated_ats_coverage_score,
       changes: normalized.resume?.content_changes?.length ?? 0,
     });
+    outcomeSignatureRef.current = signature;
     const accepted = { ...normalized, result_source: source };
     setOutcome(accepted);
     setResult(
@@ -1062,6 +1200,11 @@ export function App() {
     setSelectedOmittedTerms(new Set());
     setError('');
     return true;
+  }
+  function beginRun() {
+    outcomeSignatureRef.current = null;
+    runIdRef.current += 1;
+    return runIdRef.current;
   }
   async function recoverResultFor(
     captured: CapturedJob,
@@ -1118,20 +1261,69 @@ export function App() {
         });
         return false;
       }
+      // Only let a snapshot re-pin the language when it belongs to the capture on screen;
+      // otherwise a stale English result overrides what detectLanguage just worked out.
+      if (stored.capture_received_at_ms !== captured.received_at_ms) {
+        console.info('[ui-result] ignoring result from a different capture', {
+          reason,
+          storedCaptureId: stored.capture_received_at_ms,
+          captureId: captured.received_at_ms,
+        });
+        return false;
+      }
       languageRef.current = stored.language;
       setLanguage(stored.language);
-      return acceptResult(
+      const runId = runIdRef.current;
+      const accepted = acceptResult(
         stored,
         'recovery',
         stored.capture_received_at_ms,
         stored.language,
+        runId,
       );
+      if (
+        accepted &&
+        !preflightRef.current &&
+        stored.analysis &&
+        'required_skills' in stored.analysis
+      ) {
+        try {
+          const rebuilt = await invoke<PreflightResult>(
+            'prepare_evidence_preflight',
+            { language: stored.language, analysis: stored.analysis },
+          );
+          // A run may have started while this was in flight; applyPreflight would reset
+          // the evidence the user just confirmed.
+          if (runId !== runIdRef.current) {
+            console.info('[ui-result] discarded late preflight rebuild', { reason });
+            return accepted;
+          }
+          applyPreflight(rebuilt);
+        } catch (preflightReason) {
+          console.error(
+            '[ui-result] preflight rebuild from recovery failed',
+            preflightReason,
+          );
+        }
+      }
+      return accepted;
     } catch (reason) {
       console.error('[ui-result] any-language recovery failed', reason);
       setError(`Result recovery failed: ${errorText(reason)}`);
       return false;
     }
   }
+  const job = capture?.parsed;
+  // Single source of truth for what is on screen. `result` used to outrank `workflowPhase`
+  // in the render tree, so a result landing mid-run swapped the pipeline for the completion
+  // screen and back. An in-flight run now keeps the pipeline mounted until it finishes.
+  const screen: Screen = useMemo(() => {
+    if (!job) return 'empty';
+    if (workflowPhase === 'tailoring' && running) return 'pipeline';
+    if (result) return 'completion';
+    if (workflowPhase === 'tailoring') return 'pipeline';
+    return 'review';
+  }, [job, workflowPhase, running, result]);
   useEffect(() => {
     void fetch(BRIDGE_HEALTH_URL)
       .then(async (response) => {
@@ -1153,7 +1345,11 @@ export function App() {
       .then((latest) => {
         captureRef.current = latest;
         setCapture(latest);
-        if (latest) void recoverLatestResultForCapture(latest, 'startup');
+        if (latest) {
+          languageRef.current = detectLanguage(latest.parsed);
+          setLanguage(languageRef.current);
+          void recoverLatestResultForCapture(latest, 'startup');
+        }
       })
       .catch((reason) => setError(errorText(reason)));
     void loadBank();
@@ -1161,15 +1357,33 @@ export function App() {
     let unlistenProgress: (() => void) | undefined;
     let unlistenResult: (() => void) | undefined;
     void listen<CapturedJob>('job-data-received', (event) => {
+      // `/captures` and the legacy `/analyze` route both emit this event, so a stale
+      // extension service worker can deliver the same capture twice. Re-running the reset
+      // would tear the view down a second time for no new data.
+      if (
+        event.payload.received_at_ms === captureRef.current?.received_at_ms
+      ) {
+        console.info('[ui-result] ignoring duplicate capture event', {
+          captureId: event.payload.received_at_ms,
+        });
+        return;
+      }
+      beginRun();
       captureRef.current = event.payload;
       setCapture(event.payload);
+      languageRef.current = detectLanguage(event.payload.parsed);
+      setLanguage(languageRef.current);
       setResult(null);
       setOutcome(null);
+      preflightRef.current = null;
       setPreflight(null);
       setPreflightCollapsed(false);
       setSelectedOmittedTerms(new Set());
       setWorkflowPhase('job');
       setProgressEvents([]);
+      // A new capture supersedes whatever was running; leaving `running` set would keep
+      // the loader and the disabled buttons alive with nothing behind them.
+      setRunning(false);
       setError('');
     })
       .then((cleanup) => {
@@ -1178,16 +1392,6 @@ export function App() {
       .catch((reason) => setError(errorText(reason)));
     void listen<PipelineProgress>('resume-pipeline-progress', (event) => {
       setProgressEvents((current) => [...current, event.payload]);
-      if (event.payload.stage === 'complete') {
-        const currentCapture = captureRef.current;
-        if (currentCapture) {
-          void recoverResultFor(
-            currentCapture,
-            languageRef.current,
-            'pipeline-complete-event',
-          );
-        }
-      }
     })
       .then((cleanup) => {
         unlistenProgress = cleanup;
@@ -1225,12 +1429,17 @@ export function App() {
       window.removeEventListener('unhandledrejection', onUnhandledRejection);
     };
   }, []);
-  useLayoutEffect(() => {
-    if (workflowPhase !== 'tailoring') return;
-    const element = pipelineRef.current;
-    element?.scrollIntoView({ behavior: 'auto', block: 'start' });
-    element?.focus({ preventScroll: true });
-  }, [workflowPhase]);
+  // One scroll owner. A layout effect used to jump to the pipeline while a separate
+  // [outcome] effect smooth-scrolled to the summary on every result write, so the two
+  // fought each other several times per run. `outcome` now changes at most once per run
+  // because acceptResult drops duplicate payloads.
+  useEffect(() => {
+    const element =
+      screen === 'pipeline' ? pipelineRef.current : summaryRef.current;
+    if (!element) return;
+    element.scrollIntoView({ behavior: 'auto', block: 'start' });
+    element.focus({ preventScroll: true });
+  }, [screen, outcome]);
   useEffect(() => {
     if (!outcome) return;
     console.info('[ui-result] outcome committed to React', {
@@ -1241,8 +1450,6 @@ export function App() {
     });
     const frame = window.requestAnimationFrame(() => {
       const element = summaryRef.current;
-      element?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-      element?.focus({ preventScroll: true });
       const rect = element?.getBoundingClientRect();
       const diagnostic = {
         capture_id: outcome.capture_received_at_ms,
@@ -1273,6 +1480,7 @@ export function App() {
       return;
     }
     const targetLanguage = language;
+    const runId = beginRun();
     setRunning(true);
     setError('');
     setResult(null);
@@ -1283,6 +1491,9 @@ export function App() {
       });
       console.info('[ui-result] analysis command resolved');
       applyPreflight(next);
+      // The resolved command is authoritative and the backend already pushed the same
+      // snapshot through `resume-pipeline-result`; re-reading it from disk only produced
+      // a third identical commit. Recovery stays on the failure path, where it matters.
       acceptResult(
         localOutcome({
           captureId: commandCapture.received_at_ms,
@@ -1292,8 +1503,8 @@ export function App() {
         'command',
         commandCapture.received_at_ms,
         targetLanguage,
+        runId,
       );
-      await recoverResultFor(commandCapture, targetLanguage, 'analysis-command-resolved');
     } catch (reason) {
       console.error('[ui-result] analysis command rejected', reason);
       const message = errorText(reason);
@@ -1319,6 +1530,7 @@ export function App() {
           'command',
           commandCapture.received_at_ms,
           targetLanguage,
+          runId,
         );
       }
     } finally {
@@ -1332,10 +1544,12 @@ export function App() {
       setError('The captured job is unavailable. Capture the job again.');
       return;
     }
+    const runId = beginRun();
     setWorkflowPhase('tailoring');
     setRunning(true);
     setError('');
     setResult(null);
+    setOutcome(null);
     setProgressEvents(INITIAL_TAILORING_PROGRESS);
     const selectedEvidence = preflight.items
       .filter(
@@ -1366,6 +1580,9 @@ export function App() {
         score: resume.report?.estimated_ats_coverage_score,
         changes: resume.content_changes.length,
       });
+      // Authoritative payload; the pushed event carried the same snapshot. The extra
+      // disk re-read that used to follow only added a duplicate commit and delayed
+      // `setRunning(false)` by a further IPC round-trip.
       acceptResult(
         localOutcome({
           captureId: commandCaptureId,
@@ -1376,11 +1593,8 @@ export function App() {
         'command',
         commandCaptureId,
         language,
+        runId,
       );
-      const currentCapture = captureRef.current;
-      if (currentCapture) {
-        await recoverResultFor(currentCapture, language, 'tailoring-command-resolved');
-      }
       void loadBank();
     } catch (reason) {
       console.error('[ui-result] tailoring command rejected', reason);
@@ -1423,6 +1637,7 @@ export function App() {
             'command',
             currentCapture.received_at_ms,
             language,
+            runId,
           );
         }
       }
@@ -1442,6 +1657,7 @@ export function App() {
     const selectedTerms = [...selectedOmittedTerms];
     const targetLanguage = sourceOutcome.language;
     const captureId = sourceOutcome.capture_received_at_ms;
+    const runId = beginRun();
     setWorkflowPhase('tailoring');
     setRunning(true);
     setError('');
@@ -1457,14 +1673,17 @@ export function App() {
       },
     ]);
     try {
-      const resume = await invoke<ResumeResult>('retailor_resume_with_evidence', {
-        request: {
-          capture_id: captureId,
-          language: targetLanguage,
-          source_variant_slug: sourceVariantSlug,
-          selected_terms: selectedTerms,
+      const resume = await invoke<ResumeResult>(
+        'retailor_resume_with_evidence',
+        {
+          request: {
+            capture_id: captureId,
+            language: targetLanguage,
+            source_variant_slug: sourceVariantSlug,
+            selected_terms: selectedTerms,
+          },
         },
-      });
+      );
       acceptResult(
         localOutcome({
           captureId,
@@ -1475,15 +1694,8 @@ export function App() {
         'command',
         captureId,
         targetLanguage,
+        runId,
       );
-      const currentCapture = captureRef.current;
-      if (currentCapture) {
-        await recoverResultFor(
-          currentCapture,
-          targetLanguage,
-          'retailoring-command-resolved',
-        );
-      }
       void loadBank();
     } catch (reason) {
       const message = errorText(reason);
@@ -1499,6 +1711,7 @@ export function App() {
           total_attempts: null,
         },
       ]);
+      outcomeSignatureRef.current = outcomeSignature(sourceOutcome);
       setResult(sourceResult);
       setOutcome(sourceOutcome);
       setWorkflowPhase('job');
@@ -1530,15 +1743,24 @@ export function App() {
     }
   }
   async function changeLanguage(next: Language) {
-    if (next === language || languageChanging || !preflight) return;
-    const previous = language;
-    const currentAnalysis = preflight.analysis;
+    if (next === language || languageChanging) return;
     const currentCapture = captureRef.current;
     if (!currentCapture) {
       setError('The captured job is unavailable. Capture the job again.');
       return;
     }
+    // Before analysis there is no evidence preflight to rebuild, so the choice is just
+    // the language the upcoming run will use.
+    if (!preflight) {
+      languageRef.current = next;
+      setLanguage(next);
+      setError('');
+      return;
+    }
+    const previous = language;
+    const currentAnalysis = preflight.analysis;
     languageRef.current = next;
+    const runId = beginRun();
     setLanguage(next);
     setLanguageChanging(true);
     setError('');
@@ -1560,6 +1782,7 @@ export function App() {
         'command',
         currentCapture.received_at_ms,
         next,
+        runId,
       );
     } catch (reason) {
       languageRef.current = previous;
@@ -1573,13 +1796,13 @@ export function App() {
         'command',
         currentCapture.received_at_ms,
         previous,
+        runId,
       );
       setError(`Output language could not be changed: ${errorText(reason)}`);
     } finally {
       setLanguageChanging(false);
     }
   }
-  const job = capture?.parsed;
   return (
     <main className={pageClass}>
       <header className='flex items-center justify-between gap-6 max-[680px]:flex-col max-[680px]:items-start'>
@@ -1592,16 +1815,23 @@ export function App() {
         </span>
       </header>
       {error && (
-        <p className='mt-4 mb-0 rounded-lg bg-[#fff3eb] px-3 py-2.5 text-[#9e411e]' role='alert'>
+        <p
+          className='mt-4 mb-0 rounded-lg bg-[#fff3eb] px-3 py-2.5 text-[#9e411e]'
+          role='alert'
+        >
           {error}
         </p>
       )}
       {outcome && (
-        <div ref={summaryRef} tabIndex={-1} className='scroll-mt-4 outline-none'>
+        <div
+          ref={summaryRef}
+          tabIndex={-1}
+          className='scroll-mt-4 outline-none'
+        >
           <RunSummaryPanel outcome={outcome} />
         </div>
       )}
-      {result ? (
+      {screen === 'completion' && result ? (
         <section data-testid='completion-screen'>
           <ResultPanel
             result={result}
@@ -1637,7 +1867,7 @@ export function App() {
             </details>
           )}
         </section>
-      ) : workflowPhase === 'tailoring' && job ? (
+      ) : screen === 'pipeline' && job ? (
         <div
           ref={pipelineRef}
           tabIndex={-1}
@@ -1655,7 +1885,7 @@ export function App() {
             }}
           />
         </div>
-      ) : !job ? (
+      ) : screen === 'empty' || !job ? (
         <section className={`${panelClass} max-w-[650px]`}>
           <h2 className='mb-2 text-[22px] font-bold'>
             Capture a job post to begin
@@ -1692,7 +1922,9 @@ export function App() {
               </p>
             </div>
             <div className='flex flex-wrap items-start gap-2.5 max-[680px]:w-full'>
-              {preflight && (
+              {/* Available before analysis so a wrong auto-detect can be corrected
+                  without spending an OpenAI call first. */}
+              {job && (
                 <div className='grid gap-1 pt-2'>
                   <span className='text-[11px] font-bold text-[#526259]'>
                     Resume output language
@@ -1740,10 +1972,10 @@ export function App() {
                     role='group'
                     aria-label='Experience keyword emphasis'
                   >
-                    {(['low', 'balanced', 'high'] as const).map((level) => (
+                    {(['high'] as const).map((level) => (
                       <button
                         className={`cursor-pointer border-0 px-[13px] py-[11px] font-bold capitalize ${
-                          level === 'low' ? '' : 'border-l border-[#cbd4cc]'
+                          level === 'high' ? '' : 'border-l border-[#cbd4cc]'
                         } ${
                           bulletKeywordEmphasis === level
                             ? 'bg-[#e7f1ea] text-[#12673d]'
@@ -1771,10 +2003,10 @@ export function App() {
                 {languageChanging
                   ? 'Preparing language...'
                   : running
-                  ? 'Working...'
-                  : preflight
-                    ? 'Generate tailored PDF'
-                    : 'Analyze job'}
+                    ? 'Working...'
+                    : preflight
+                      ? 'Generate tailored PDF'
+                      : 'Analyze job'}
               </button>
             </div>
           </section>
@@ -1802,44 +2034,52 @@ export function App() {
                 }
               />
             ))}
-          {(running || progressEvents.length > 0) && (
+          {progressEvents.length > 0 && (
             <ProgressPanel events={progressEvents} running={running} />
           )}
         </>
       )}
-      {workflowPhase === 'job' && !result && bank && bank.entries.length > 0 && (
-        <details className={compactPanelClass}>
-          <summary className='cursor-pointer list-none [&::-webkit-details-marker]:hidden'>
-            <span className='flex items-center justify-between gap-4'>
-              <span>
-                <span className={`${eyebrowClass} block`}>SAVED EVIDENCE</span>
-                <strong className='text-[22px]'>Your local capability bank</strong>
-                <small className='mt-1 block text-xs font-normal text-[#627067]'>
-                  {bank.entries.length} saved capabilities · collapsed by default
-                </small>
+      {workflowPhase === 'job' &&
+        !result &&
+        bank &&
+        bank.entries.length > 0 && (
+          <details className={compactPanelClass}>
+            <summary className='cursor-pointer list-none [&::-webkit-details-marker]:hidden'>
+              <span className='flex items-center justify-between gap-4'>
+                <span>
+                  <span className={`${eyebrowClass} block`}>
+                    SAVED EVIDENCE
+                  </span>
+                  <strong className='text-[22px]'>
+                    Your local capability bank
+                  </strong>
+                  <small className='mt-1 block text-xs font-normal text-[#627067]'>
+                    {bank.entries.length} saved capabilities · collapsed by
+                    default
+                  </small>
+                </span>
+                <span className='text-sm font-bold text-[#176a46]'>Show</span>
               </span>
-              <span className='text-sm font-bold text-[#176a46]'>Show</span>
-            </span>
-          </summary>
-          <div className='mt-5 flex flex-wrap gap-2 border-t border-[#e7ebe7] pt-5'>
-            {bank.entries.map((entry) => (
-              <span
-                className='inline-flex items-center gap-[7px] rounded-full border border-[#d7e4d9] bg-[#eef4ef] py-[5px] pr-[7px] pl-2.5 text-[13px]'
-                key={entry.term}
-              >
-                {entry.term}
-                <button
-                  className='cursor-pointer border-0 bg-transparent px-0.5 py-0 text-lg leading-none text-[#385347]'
-                  aria-label={`Remove ${entry.term}`}
-                  onClick={() => remove(entry.term)}
+            </summary>
+            <div className='mt-5 flex flex-wrap gap-2 border-t border-[#e7ebe7] pt-5'>
+              {bank.entries.map((entry) => (
+                <span
+                  className='inline-flex items-center gap-[7px] rounded-full border border-[#d7e4d9] bg-[#eef4ef] py-[5px] pr-[7px] pl-2.5 text-[13px]'
+                  key={entry.term}
                 >
-                  x
-                </button>
-              </span>
-            ))}
-          </div>
-        </details>
-      )}
+                  {entry.term}
+                  <button
+                    className='cursor-pointer border-0 bg-transparent px-0.5 py-0 text-lg leading-none text-[#385347]'
+                    aria-label={`Remove ${entry.term}`}
+                    onClick={() => remove(entry.term)}
+                  >
+                    x
+                  </button>
+                </span>
+              ))}
+            </div>
+          </details>
+        )}
     </main>
   );
 }

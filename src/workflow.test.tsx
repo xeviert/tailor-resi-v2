@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import '@testing-library/jest-dom/vitest';
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
@@ -109,13 +109,14 @@ afterEach(() => {
 });
 
 describe('review-to-tailoring workflow', () => {
-  it('shows output language after analysis and opens an immediate focused pipeline', async () => {
+  it('shows output language before analysis and opens an immediate focused pipeline', async () => {
     render(<App />);
 
     expect(await screen.findByText('Unique captured job description.')).toBeVisible();
+    // Offered up front so a wrong auto-detect can be corrected before an analysis call.
     expect(
-      screen.queryByRole('group', { name: 'Resume output language' }),
-    ).not.toBeInTheDocument();
+      screen.getByRole('group', { name: 'Resume output language' }),
+    ).toBeVisible();
 
     fireEvent.click(screen.getByRole('button', { name: 'Analyze job' }));
 
@@ -295,5 +296,206 @@ describe('review-to-tailoring workflow', () => {
     expect(
       screen.getByRole('button', { name: 'Angular in experience' }),
     ).toHaveAttribute('aria-pressed', 'true');
+  });
+
+  it('rebuilds preflight from a recovered analysis instead of re-analyzing', async () => {
+    const fullAnalysis = {
+      role_target: 'Backend Engineer',
+      seniority: 'Mid-level',
+      core_keywords: [],
+      required_skills: ['Rust'],
+      preferred_skills: [],
+      tools_and_platforms: [],
+      domain_terms: [],
+      responsibility_phrases: [],
+      achievement_angles: [],
+      ats_phrase_bank: [],
+      must_not_claim_without_evidence: [],
+      summary: analysis.summary,
+    };
+    const sourceResume = completedResume();
+    mocks.invoke.mockImplementation((command: string) => {
+      switch (command) {
+        case 'get_latest_job':
+          return Promise.resolve(captured);
+        case 'get_latest_pipeline_result_any_language':
+          return Promise.resolve({
+            schema_version: 2,
+            capture_received_at_ms: 42,
+            language: 'en',
+            recovered_from_artifacts: false,
+            status: 'completed',
+            summary: fullAnalysis.summary,
+            failed_stage: null,
+            error: null,
+            analysis: fullAnalysis,
+            resume: sourceResume,
+          });
+        case 'get_latest_pipeline_result':
+          return Promise.resolve(null);
+        case 'get_evidence_bank':
+          return Promise.resolve({ version: 1, entries: [] });
+        case 'prepare_evidence_preflight':
+          return Promise.resolve({ analysis: fullAnalysis, items: [] });
+        default:
+          return Promise.resolve(null);
+      }
+    });
+
+    render(<App />);
+
+    await waitFor(() =>
+      expect(mocks.invoke).toHaveBeenCalledWith('prepare_evidence_preflight', {
+        language: 'en',
+        analysis: fullAnalysis,
+      }),
+    );
+    expect(
+      mocks.invoke.mock.calls.filter(
+        ([command]) => command === 'analyze_latest_job',
+      ),
+    ).toHaveLength(0);
+
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Back to captured job' }),
+    );
+    expect(
+      await screen.findByRole('button', { name: 'Generate tailored PDF' }),
+    ).toBeVisible();
+  });
+});
+
+describe('render stability during a run', () => {
+  // Wrapped in act() so the resulting state updates are flushed before we assert;
+  // otherwise an assertion can pass against the pre-event render.
+  async function emit(event: string, payload: unknown) {
+    const handlers = mocks.listen.mock.calls
+      .filter(([name]) => name === event)
+      .map(([, handler]) => handler as (e: { payload: unknown }) => void);
+    expect(handlers.length).toBeGreaterThan(0);
+    await act(async () => {
+      for (const handler of handlers) handler({ payload });
+    });
+  }
+
+  function storedResult(overrides: Record<string, unknown> = {}) {
+    return {
+      schema_version: 2,
+      capture_received_at_ms: 42,
+      language: 'en',
+      recovered_from_artifacts: false,
+      status: 'completed',
+      summary: analysis.summary,
+      failed_stage: null,
+      error: null,
+      analysis,
+      resume: completedResume(),
+      ...overrides,
+    };
+  }
+
+  async function startTailoring() {
+    render(<App />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Analyze job' }));
+    fireEvent.click(
+      await screen.findByRole('button', { name: 'Generate tailored PDF' }),
+    );
+    expect(await screen.findByTestId('focused-pipeline')).toBeVisible();
+  }
+
+  // The backend emits `resume-pipeline-result` before the command promise resolves.
+  // `result` used to outrank `workflowPhase`, so that event swapped the pipeline for the
+  // completion screen and a later payload swapped it back.
+  it('keeps the pipeline mounted when a result event lands mid-run', async () => {
+    await startTailoring();
+
+    await emit('resume-pipeline-result', storedResult());
+
+    await waitFor(() =>
+      expect(screen.getByTestId('focused-pipeline')).toBeVisible(),
+    );
+    expect(screen.queryByTestId('completion-screen')).not.toBeInTheDocument();
+  });
+
+  it('does not fall back to the review screen while a run is in flight', async () => {
+    await startTailoring();
+
+    // An interim analysis-only snapshot carries no resume and used to null `result`.
+    await emit(
+      'resume-pipeline-result',
+      storedResult({ status: 'analysis_ready', resume: null }),
+    );
+
+    await waitFor(() =>
+      expect(screen.getByTestId('focused-pipeline')).toBeVisible(),
+    );
+    expect(
+      screen.queryByRole('button', { name: 'Generate tailored PDF' }),
+    ).not.toBeInTheDocument();
+  });
+
+  it('commits one outcome when the event and the command report the same result', async () => {
+    mocks.invoke.mockImplementation((command: string) => {
+      switch (command) {
+        case 'get_latest_job':
+          return Promise.resolve(captured);
+        case 'get_latest_pipeline_result_any_language':
+        case 'get_latest_pipeline_result':
+          return Promise.resolve(null);
+        case 'get_evidence_bank':
+          return Promise.resolve({ version: 1, entries: [] });
+        case 'analyze_latest_job':
+        case 'prepare_evidence_preflight':
+          return Promise.resolve(preflight);
+        case 'generate_tailored_resume':
+          return Promise.resolve(completedResume());
+        default:
+          return Promise.resolve(null);
+      }
+    });
+
+    render(<App />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Analyze job' }));
+    const generateButton = await screen.findByRole('button', {
+      name: 'Generate tailored PDF',
+    });
+    const before = mocks.invoke.mock.calls.filter(
+      ([command]) => command === 'record_ui_result_state',
+    ).length;
+
+    fireEvent.click(generateButton);
+    expect(await screen.findByTestId('completion-screen')).toBeVisible();
+
+    const diagnostics = () =>
+      mocks.invoke.mock.calls.filter(
+        ([command]) => command === 'record_ui_result_state',
+      ).length - before;
+    // The diagnostic write is scheduled in a requestAnimationFrame.
+    await waitFor(() => expect(diagnostics()).toBe(1));
+
+    // The pushed event repeats what the resolved command already delivered.
+    await emit('resume-pipeline-result', storedResult());
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    });
+
+    expect(diagnostics()).toBe(1);
+  });
+
+  it('ignores a repeated capture event for the job already on screen', async () => {
+    render(<App />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Analyze job' }));
+    expect(
+      await screen.findByRole('button', { name: 'Generate tailored PDF' }),
+    ).toBeVisible();
+
+    // A stale extension service worker can post the same capture to both routes.
+    await emit('job-data-received', captured);
+
+    await waitFor(() =>
+      expect(
+        screen.getByRole('button', { name: 'Generate tailored PDF' }),
+      ).toBeVisible(),
+    );
   });
 });

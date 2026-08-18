@@ -82,7 +82,8 @@ pub fn build_analysis_prompt(parsed_job: &serde_json::Value) -> String {
          Semantically deduplicate terms across every array; choose one clear ATS-friendly label per capability.\n\
          Do not put job titles, company names, generic personality traits, or full requirement sentences in capability arrays.\n\
          Classify tools and frameworks as technology, working methods and business domains as method_domain, and claims about actions performed as responsibility.\n\
-         Focus on analysis for a later resume-writing layer; do not rewrite resume bullets.\n\n\
+         Focus on analysis for a later resume-writing layer; do not rewrite resume bullets.\n\
+         Write every extracted field (role_target, seniority, core_keywords terms and evidence, required_skills, preferred_skills, tools_and_platforms, domain_terms, responsibility_phrases, achievement_angles, ats_phrase_bank, must_not_claim_without_evidence, and summary) in the same language as the job post itself. Do not translate the job post's language into English or any other language.\n\n\
          Normalized job JSON:\n{compact_job}"
     )
 }
@@ -142,7 +143,7 @@ fn build_openai_request(model: &str, parsed_job: &serde_json::Value) -> serde_js
         "input": [
             {
                 "role": "system",
-                "content": "You extract ATS-relevant resume-tailoring signals from job posts. You only use evidence present in the job post."
+                "content": "You extract ATS-relevant resume-tailoring signals from job posts. You only use evidence present in the job post. You always write extracted terms and text in the same language as the job post itself, never translating them."
             },
             {
                 "role": "user",
@@ -235,6 +236,7 @@ mod tests {
         assert!(prompt.contains("Do not invent"));
         assert!(prompt.contains("Semantically deduplicate"));
         assert!(prompt.contains("one to six words"));
+        assert!(prompt.contains("same language as the job post"));
     }
 
     #[test]
