@@ -1,7 +1,9 @@
 use crate::analysis::JobAnalysis;
 use crate::tailoring::TailoringError;
+use atomicwrites::{AllowOverwrite, AtomicFile};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
@@ -48,10 +50,13 @@ pub struct PreflightItem {
 }
 
 #[derive(Clone, Debug)]
-struct Candidate {
-    term: String,
-    kind: String,
-    importance: u8,
+pub(crate) struct Candidate {
+    pub(crate) term: String,
+    pub(crate) kind: String,
+    pub(crate) importance: u8,
+    /// Which part of the analysis this term came from. `kind` says what sort of thing it is;
+    /// `group` says how the job post asked for it, which is what a coverage report needs.
+    pub(crate) group: &'static str,
 }
 
 pub fn evidence_bank_path(root: &Path) -> PathBuf {
@@ -110,24 +115,77 @@ pub fn save_selected_evidence(
         }
     }
     bank.version = 2;
-    let path = evidence_bank_path(root);
-    let text = serde_json::to_string_pretty(&bank)
-        .map_err(|error| TailoringError::InvalidJson(error.to_string()))?;
-    std::fs::write(path, format!("{text}\n"))
-        .map_err(|error| TailoringError::Io(error.to_string()))?;
+    write_evidence_bank(root, &bank)?;
     Ok(bank)
 }
 
 pub fn remove_evidence(root: &Path, term: &str) -> Result<EvidenceBank, TailoringError> {
     let mut bank = load_evidence_bank(root)?;
-    bank.entries
-        .retain(|entry| normalize(&entry.term) != normalize(term));
-    let path = evidence_bank_path(root);
-    let text = serde_json::to_string_pretty(&bank)
-        .map_err(|error| TailoringError::InvalidJson(error.to_string()))?;
-    std::fs::write(path, format!("{text}\n"))
-        .map_err(|error| TailoringError::Io(error.to_string()))?;
+    // Removal has to use the matcher `save_selected_evidence` upserts with. With exact
+    // normalized equality here, an entry saved under a fuzzy match could not be deleted at all.
+    bank.entries.retain(|entry| {
+        !equivalent(&entry.term, term) && !placement_equivalent_terms(&entry.term, term)
+    });
+    write_evidence_bank(root, &bank)?;
     Ok(bank)
+}
+
+/// Writes the bank atomically. It is a single file holding every claim the user has ever
+/// attested to, fully rewritten on each save, so a crash mid-write would take the whole
+/// history with it.
+fn write_evidence_bank(root: &Path, bank: &EvidenceBank) -> Result<(), TailoringError> {
+    let text = serde_json::to_string_pretty(bank)
+        .map_err(|error| TailoringError::InvalidJson(error.to_string()))?;
+    AtomicFile::new(evidence_bank_path(root), AllowOverwrite)
+        .write(|output| output.write_all(format!("{text}\n").as_bytes()))
+        .map_err(|error| TailoringError::Io(error.to_string()))
+}
+
+/// The weighted, de-duplicated set of terms a job post asks for.
+///
+/// The evidence preflight and the ATS scorer both work from this list. Keeping it in one
+/// place is what stops the two from disagreeing about what the job actually wants — the
+/// preflight asking the user to confirm one set of terms while the score measures another.
+pub(crate) fn analysis_candidates(analysis: &JobAnalysis) -> Vec<Candidate> {
+    let mut candidates = Vec::new();
+    candidates.extend(analysis.core_keywords.iter().map(|signal| Candidate {
+        term: signal.term.clone(),
+        kind: inferred_kind(&signal.term, &group_kind(&signal.category)),
+        importance: signal.importance,
+        group: "core",
+    }));
+    candidates.extend(
+        analysis
+            .required_skills
+            .iter()
+            .map(|term| candidate(term, inferred_kind(term, "technology"), 5, "required")),
+    );
+    candidates.extend(
+        analysis
+            .preferred_skills
+            .iter()
+            .map(|term| candidate(term, inferred_kind(term, "technology"), 3, "preferred")),
+    );
+    candidates.extend(
+        analysis
+            .tools_and_platforms
+            .iter()
+            .map(|term| candidate(term, "technology", 4, "tools")),
+    );
+    candidates.extend(
+        analysis
+            .domain_terms
+            .iter()
+            .map(|term| candidate(term, "method_domain", 3, "domain")),
+    );
+    candidates.extend(
+        analysis
+            .responsibility_phrases
+            .iter()
+            .map(|term| candidate(term, "responsibility", 4, "responsibilities")),
+    );
+
+    consolidate_candidates(candidates)
 }
 
 pub fn preflight_items(
@@ -135,44 +193,7 @@ pub fn preflight_items(
     base_resume: &serde_json::Value,
     bank: &EvidenceBank,
 ) -> Vec<PreflightItem> {
-    let mut candidates = Vec::new();
-    candidates.extend(analysis.core_keywords.iter().map(|signal| Candidate {
-        term: signal.term.clone(),
-        kind: inferred_kind(&signal.term, &group_kind(&signal.category)),
-        importance: signal.importance,
-    }));
-    candidates.extend(
-        analysis
-            .required_skills
-            .iter()
-            .map(|term| candidate(term, inferred_kind(term, "technology"), 5)),
-    );
-    candidates.extend(
-        analysis
-            .preferred_skills
-            .iter()
-            .map(|term| candidate(term, inferred_kind(term, "technology"), 3)),
-    );
-    candidates.extend(
-        analysis
-            .tools_and_platforms
-            .iter()
-            .map(|term| candidate(term, "technology", 4)),
-    );
-    candidates.extend(
-        analysis
-            .domain_terms
-            .iter()
-            .map(|term| candidate(term, "method_domain", 3)),
-    );
-    candidates.extend(
-        analysis
-            .responsibility_phrases
-            .iter()
-            .map(|term| candidate(term, "responsibility", 4)),
-    );
-
-    let candidates = consolidate_candidates(candidates);
+    let candidates = analysis_candidates(analysis);
     let base_strings = json_strings(base_resume);
     let role_target = normalize(&analysis.role_target);
     let mut items = candidates
@@ -249,6 +270,61 @@ pub fn preflight_items(
     items
 }
 
+/// Assembles the evidence entries handed to the tailoring model.
+///
+/// Two sources are merged: entries the preflight already resolved from the saved bank, and
+/// the selections the user just confirmed in this session. Both tailoring entry points must
+/// use this, otherwise a first run sees only the session's selections while a re-tailor sees
+/// the whole bank, and the two runs are not comparable.
+pub fn approved_evidence_for(
+    preflight: &[PreflightItem],
+    bank: &EvidenceBank,
+    selected: &[SelectedEvidence],
+) -> Vec<EvidenceEntry> {
+    let mut approved = preflight
+        .iter()
+        .filter(|item| item.source == "evidence_bank")
+        .filter_map(|item| item.matched_term.as_deref())
+        .filter_map(|matched| {
+            bank.entries
+                .iter()
+                .find(|entry| equivalent_terms(&entry.term, matched))
+                .cloned()
+        })
+        .collect::<Vec<EvidenceEntry>>();
+
+    for entry in selected_for_prompt(selected) {
+        if !approved
+            .iter()
+            .any(|existing| equivalent_terms(&existing.term, &entry.term))
+        {
+            approved.push(entry);
+        }
+    }
+    approved
+}
+
+/// Resolves already-attested bank entries for terms the caller names directly, for cases where
+/// the term is known but no `SelectedEvidence` record was built for it.
+pub fn append_banked_terms(
+    approved: &mut Vec<EvidenceEntry>,
+    bank: &EvidenceBank,
+    terms: &[String],
+) {
+    for term in terms {
+        if let Some(entry) = bank.entries.iter().find(|entry| {
+            equivalent_terms(&entry.term, term) || placement_equivalent_terms(&entry.term, term)
+        }) {
+            if !approved
+                .iter()
+                .any(|existing| equivalent_terms(&existing.term, &entry.term))
+            {
+                approved.push(entry.clone());
+            }
+        }
+    }
+}
+
 pub fn selected_for_prompt(selected: &[SelectedEvidence]) -> Vec<EvidenceEntry> {
     selected
         .iter()
@@ -267,34 +343,7 @@ pub fn selected_for_prompt(selected: &[SelectedEvidence]) -> Vec<EvidenceEntry> 
 
 pub fn infer_selected_term_kind(analysis: &JobAnalysis, selected_term: &str) -> String {
     let selected_tokens = placement_token_set(selected_term);
-    let mut candidates = Vec::new();
-    candidates.extend(analysis.core_keywords.iter().map(|signal| Candidate {
-        term: signal.term.clone(),
-        kind: inferred_kind(&signal.term, &group_kind(&signal.category)),
-        importance: signal.importance,
-    }));
-    candidates.extend(
-        analysis
-            .required_skills
-            .iter()
-            .chain(analysis.preferred_skills.iter())
-            .chain(analysis.tools_and_platforms.iter())
-            .map(|term| candidate(term, inferred_kind(term, "technology"), 0)),
-    );
-    candidates.extend(
-        analysis
-            .domain_terms
-            .iter()
-            .map(|term| candidate(term, "method_domain", 0)),
-    );
-    candidates.extend(
-        analysis
-            .responsibility_phrases
-            .iter()
-            .map(|term| candidate(term, "responsibility", 0)),
-    );
-
-    candidates
+    analysis_candidates(analysis)
         .into_iter()
         .filter_map(|candidate| {
             let candidate_tokens = placement_token_set(&candidate.term);
@@ -351,11 +400,17 @@ fn placement_token_set(value: &str) -> BTreeSet<String> {
         .collect()
 }
 
-fn candidate(term: &str, kind: impl Into<String>, importance: u8) -> Candidate {
+fn candidate(
+    term: &str,
+    kind: impl Into<String>,
+    importance: u8,
+    group: &'static str,
+) -> Candidate {
     Candidate {
         term: term.trim().to_string(),
         kind: kind.into(),
         importance,
+        group,
     }
 }
 
@@ -366,6 +421,9 @@ fn consolidate_candidates(candidates: Vec<Candidate>) -> Vec<Candidate> {
             .iter_mut()
             .find(|existing| equivalent(&existing.term, &candidate.term))
         {
+            if candidate.importance > existing.importance {
+                existing.group = candidate.group;
+            }
             existing.importance = existing.importance.max(candidate.importance);
             existing.kind = merge_kind(&existing.kind, &candidate.kind);
             if display_quality(&candidate.term) > display_quality(&existing.term) {
@@ -413,6 +471,11 @@ fn requires_confirmation(candidate: &Candidate, role_target: &str) -> bool {
     }
 }
 
+/// Soft-skill boilerplate that reads as a requirement but carries no ATS keyword value.
+///
+/// French entries matter as much as English ones: the app ships an FR resume path and French
+/// posts run through this same filter, so an English-only list lets FR boilerplate through to
+/// the confirmation queue and buries the signals that are actually worth the user's attention.
 fn is_generic_trait(term: &str) -> bool {
     let value = term.to_lowercase();
     [
@@ -425,6 +488,17 @@ fn is_generic_trait(term: &str) -> bool {
         "fast-paced",
         "high-stakes",
         "added-value",
+        "curiosité",
+        "esprit d'équipe",
+        "esprit d’équipe",
+        "autonomie",
+        "rigueur",
+        "force de proposition",
+        "aisance relationnelle",
+        "sens du service",
+        "intérêt pour",
+        "environnement dynamique",
+        "valeur ajoutée",
     ]
     .iter()
     .any(|generic| value.contains(generic))
@@ -434,15 +508,32 @@ fn is_job_title(term: &str) -> bool {
     let value = term.trim().to_lowercase();
     let words = value.split_whitespace().count();
     words <= 6
-        && [
+        && ([
             " engineer",
             " developer",
             " manager",
             " architect",
             " specialist",
+            " ingénieur",
+            " développeur",
+            " développeuse",
+            " architecte",
+            " responsable",
+            " consultant",
         ]
         .iter()
         .any(|suffix| value.ends_with(suffix))
+            // French titles lead with the role word rather than trailing it.
+            || [
+                "ingénieur ",
+                "développeur ",
+                "développeuse ",
+                "architecte ",
+                "chef de projet",
+                "responsable ",
+            ]
+            .iter()
+            .any(|prefix| value.starts_with(prefix)))
 }
 
 fn is_specific_responsibility(term: &str) -> bool {
@@ -459,6 +550,14 @@ fn is_specific_responsibility(term: &str) -> bool {
         "hire",
         "mentor",
         "direct reports",
+        "gérer",
+        "diriger",
+        "piloter",
+        "encadrer",
+        "déployer",
+        "sécurité",
+        "conformité",
+        "recruter",
     ]
     .iter()
     .any(|marker| value.contains(marker))
@@ -487,6 +586,25 @@ fn inferred_kind(term: &str, fallback: &str) -> String {
         "raise ",
         "bring ",
         "identify ",
+        "construire ",
+        "concevoir ",
+        "développer ",
+        "gérer ",
+        "diriger ",
+        "piloter ",
+        "encadrer ",
+        "assurer ",
+        "mettre en ",
+        "participer ",
+        "contribuer ",
+        "collaborer ",
+        "définir ",
+        "créer ",
+        "maintenir ",
+        "accompagner ",
+        "améliorer ",
+        "identifier ",
+        "déployer ",
     ]
     .iter()
     .any(|prefix| value.starts_with(prefix))
@@ -509,6 +627,17 @@ fn inferred_kind(term: &str, fallback: &str) -> String {
         "system design",
         "architecture discussion",
         "ai fluency",
+        "fiabilité",
+        "maintenabilité",
+        "évolutivité",
+        "scalabilité",
+        "dette technique",
+        "tests automatisés",
+        "revue de code",
+        "conception système",
+        "méthodologie agile",
+        "accessibilité",
+        "qualité de code",
     ]
     .iter()
     .any(|marker| value.contains(marker))
@@ -553,7 +682,7 @@ fn collect_json_strings(value: &serde_json::Value, strings: &mut Vec<String>) {
     }
 }
 
-fn text_supports(text: &str, term: &str) -> bool {
+pub(crate) fn text_supports(text: &str, term: &str) -> bool {
     let text_tokens = token_set(text);
     let term_tokens = token_set(term);
     !term_tokens.is_empty() && term_tokens.is_subset(&text_tokens)
@@ -576,7 +705,12 @@ fn equivalent(left: &str, right: &str) -> bool {
     smaller >= 2 && overlap == smaller && smaller * 4 >= left.len().max(right.len()) * 3
 }
 
-fn token_set(value: &str) -> BTreeSet<String> {
+/// Splits text into the comparable token set used by every matcher in this module.
+///
+/// The stop list is bilingual on purpose. `text_supports` demands that *every* token of a term
+/// appear in the text, so an unfiltered French article is enough to make a real match fail —
+/// "gestion de projet" would never match a bullet that says "gestion projet".
+pub(crate) fn token_set(value: &str) -> BTreeSet<String> {
     const STOP_WORDS: &[&str] = &[
         "a",
         "an",
@@ -611,14 +745,83 @@ fn token_set(value: &str) -> BTreeSet<String> {
         "behind",
         "such",
         "as",
+        // French
+        "de",
+        "des",
+        "du",
+        "le",
+        "la",
+        "les",
+        "un",
+        "une",
+        "et",
+        "ou",
+        "au",
+        "aux",
+        "pour",
+        "avec",
+        "dans",
+        "sur",
+        "vos",
+        "votre",
+        "solide",
+        "bonne",
+        "bonnes",
+        "connaissance",
+        "connaissances",
+        "maîtrise",
+        "capacité",
+        "compétence",
+        "compétences",
+        "expérience",
+        "expériences",
+        "professionnel",
+        "professionnelle",
     ];
-    value
-        .to_lowercase()
+    strip_inclusive_suffixes(&value.to_lowercase())
         .split(|ch: char| !ch.is_alphanumeric() && ch != '+' && ch != '#' && ch != '.')
         .map(|word| word.trim_matches('.'))
         .filter(|word| !word.is_empty() && !STOP_WORDS.contains(word))
         .map(|word| word.trim_end_matches('s').to_string())
         .collect()
+}
+
+/// Removes French inclusive-writing suffixes so the base word survives tokenization.
+///
+/// French job posts routinely write "référent·e", "ingénieur·e·s", "développeur·euse". Splitting
+/// on the middle dot leaves a stray one- or two-letter token and makes the term fail to match a
+/// resume that simply writes "référent". Only a short alphabetic run after the dot counts as a
+/// suffix, so a middle dot used as a genuine separator still splits tokens as before.
+fn strip_inclusive_suffixes(value: &str) -> String {
+    const SEPARATORS: [char; 3] = ['·', '‧', '•'];
+    const MAX_SUFFIX: usize = 5;
+
+    if !value.contains(SEPARATORS) {
+        return value.to_string();
+    }
+
+    let characters = value.chars().collect::<Vec<_>>();
+    let mut out = String::with_capacity(value.len());
+    let mut index = 0;
+    while index < characters.len() {
+        let character = characters[index];
+        if !SEPARATORS.contains(&character) {
+            out.push(character);
+            index += 1;
+            continue;
+        }
+        let suffix = characters[index + 1..]
+            .iter()
+            .take_while(|next| next.is_alphabetic())
+            .count();
+        if suffix > 0 && suffix <= MAX_SUFFIX {
+            index += 1 + suffix;
+        } else {
+            out.push(' ');
+            index += 1;
+        }
+    }
+    out
 }
 
 fn normalize(value: &str) -> String {
@@ -662,6 +865,7 @@ mod tests {
             achievement_angles: vec![],
             ats_phrase_bank: vec![],
             must_not_claim_without_evidence: vec![],
+            term_variants: vec![],
             summary: String::new(),
         }
     }
@@ -923,6 +1127,149 @@ mod tests {
         assert_eq!(bank.entries.len(), 1);
         assert_eq!(bank.entries[0].term, "Angular");
         assert!(bank.entries[0].allow_model_role_placement);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    fn bank_with(entries: Vec<EvidenceEntry>) -> EvidenceBank {
+        EvidenceBank {
+            version: 2,
+            entries,
+        }
+    }
+
+    fn banked(term: &str) -> EvidenceEntry {
+        EvidenceEntry {
+            term: term.into(),
+            kind: "technology".into(),
+            proof_note: None,
+            user_attested: true,
+            allow_model_role_placement: false,
+        }
+    }
+
+    fn banked_item(term: &str) -> PreflightItem {
+        PreflightItem {
+            term: term.into(),
+            kind: "technology".into(),
+            importance: 5,
+            source: "evidence_bank",
+            resolution: "auto_available",
+            resolution_reason: "Previously confirmed in saved evidence",
+            matched_term: Some(term.into()),
+            proof_note: None,
+            eligible_for_bullets: false,
+            allow_model_role_placement: false,
+        }
+    }
+
+    fn selection(term: &str) -> SelectedEvidence {
+        SelectedEvidence {
+            term: term.into(),
+            kind: "technology".into(),
+            proof_note: None,
+            allow_model_role_placement: false,
+        }
+    }
+
+    #[test]
+    fn approved_evidence_merges_banked_entries_with_this_sessions_selections() {
+        let bank = bank_with(vec![banked("Kubernetes"), banked("Terraform")]);
+        let preflight = vec![banked_item("Kubernetes")];
+
+        let approved = approved_evidence_for(&preflight, &bank, &[selection("gRPC")]);
+        let terms = approved
+            .iter()
+            .map(|entry| entry.term.as_str())
+            .collect::<Vec<_>>();
+
+        // The banked term is the regression this guards. A first tailoring run used to pass
+        // only the session's selections, so previously attested evidence never reached the
+        // model and only a re-tailor saw the full bank.
+        assert!(terms.contains(&"Kubernetes"), "{terms:?}");
+        assert!(terms.contains(&"gRPC"), "{terms:?}");
+        assert!(
+            !terms.contains(&"Terraform"),
+            "bank entries this job did not match stay out: {terms:?}"
+        );
+    }
+
+    #[test]
+    fn approved_evidence_does_not_duplicate_a_term_present_in_both_sources() {
+        let bank = bank_with(vec![banked("Kubernetes")]);
+        let preflight = vec![banked_item("Kubernetes")];
+        let approved = approved_evidence_for(&preflight, &bank, &[selection("Kubernetes")]);
+        assert_eq!(approved.len(), 1);
+    }
+
+    #[test]
+    fn append_banked_terms_resolves_terms_named_without_a_selection_record() {
+        let bank = bank_with(vec![banked("Angular")]);
+        let mut approved = Vec::new();
+        append_banked_terms(&mut approved, &bank, &["Angular".to_string()]);
+        assert_eq!(approved.len(), 1);
+        append_banked_terms(&mut approved, &bank, &["Angular".to_string()]);
+        assert_eq!(approved.len(), 1, "a repeated term must not be added twice");
+    }
+
+    #[test]
+    fn french_boilerplate_is_filtered_like_its_english_equivalent() {
+        assert!(is_generic_trait("Curiosité intellectuelle"));
+        assert!(is_generic_trait("Esprit d’équipe"));
+        assert!(is_generic_trait("Autonomie et rigueur"));
+        assert!(is_job_title("Ingénieur logiciel"));
+        assert!(is_job_title("Architecte technique"));
+        assert!(is_job_title("Chef de projet technique"));
+        assert!(!is_generic_trait("Kubernetes"));
+        assert!(!is_job_title("Kubernetes"));
+    }
+
+    #[test]
+    fn french_responsibility_verbs_are_classified_as_responsibilities() {
+        assert_eq!(
+            inferred_kind("Développer des interfaces accessibles", "technology"),
+            "responsibility"
+        );
+        assert_eq!(
+            inferred_kind("Encadrer une équipe de développeurs", "technology"),
+            "responsibility"
+        );
+        assert_eq!(inferred_kind("PostgreSQL", "technology"), "technology");
+    }
+
+    #[test]
+    fn french_articles_do_not_block_a_genuine_match() {
+        // `text_supports` demands every token of the term, so an unfiltered "de" would sink
+        // this match even though the bullet plainly supports the claim.
+        assert!(text_supports(
+            "Gestion projet et animation d’atelier",
+            "gestion de projet"
+        ));
+    }
+
+    #[test]
+    fn a_fuzzily_saved_entry_can_still_be_removed() {
+        let suffix = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("resume-evidence-remove-{suffix}"));
+        std::fs::create_dir_all(root.join("resume")).unwrap();
+        save_selected_evidence(
+            &root,
+            &[SelectedEvidence {
+                term: "Angular".into(),
+                kind: "technology".into(),
+                proof_note: None,
+                allow_model_role_placement: true,
+            }],
+        )
+        .unwrap();
+
+        // The UI offers the term as the preflight labelled it, which is not always the exact
+        // string that landed in the bank. Exact-equality removal could not delete this.
+        let bank = remove_evidence(&root, "Angular dans l’expérience").unwrap();
+
+        assert!(bank.entries.is_empty(), "{:?}", bank.entries);
         std::fs::remove_dir_all(root).unwrap();
     }
 }

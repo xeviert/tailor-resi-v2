@@ -1,7 +1,15 @@
 // @vitest-environment jsdom
 
 import '@testing-library/jest-dom/vitest';
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
@@ -157,6 +165,31 @@ describe('review-to-tailoring workflow', () => {
     expect(mocks.invoke).toHaveBeenCalledWith('generate_tailored_resume', {
       request: expect.objectContaining({ language: 'fr' }),
     });
+  });
+
+  it('defaults to high emphasis and sends max only when the user picks it', async () => {
+    render(<App />);
+    expect(await screen.findByText('Unique captured job description.')).toBeVisible();
+    fireEvent.click(screen.getByRole('button', { name: 'Analyze job' }));
+    expect(
+      await screen.findByRole('button', { name: 'Generate tailored PDF' }),
+    ).toBeVisible();
+
+    const emphasis = screen.getByRole('group', {
+      name: 'Experience keyword emphasis',
+    });
+    expect(within(emphasis).getByRole('button', { name: 'high' })).toBeVisible();
+    fireEvent.click(within(emphasis).getByRole('button', { name: 'max' }));
+
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Generate tailored PDF' }),
+    );
+
+    await waitFor(() =>
+      expect(mocks.invoke).toHaveBeenCalledWith('generate_tailored_resume', {
+        request: expect.objectContaining({ bullet_keyword_emphasis: 'max' }),
+      }),
+    );
   });
 
   it('keeps a failed pipeline visible until the user returns to review', async () => {

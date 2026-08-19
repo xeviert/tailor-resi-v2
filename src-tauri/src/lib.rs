@@ -1,9 +1,11 @@
 mod analysis;
 mod api_usage;
+mod ats_score;
 mod commands;
 mod config;
 mod error;
 mod evidence;
+mod http;
 mod server;
 mod tailoring;
 

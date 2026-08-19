@@ -15,15 +15,75 @@ import { JobPanel } from './job-panel';
 import './styles.css';
 
 type Language = 'en' | 'fr';
-type BulletKeywordEmphasis = 'low' | 'balanced' | 'high';
+type BulletKeywordEmphasis = 'low' | 'balanced' | 'high' | 'max';
 type CapturedJob = {
   received_at_ms: number;
   payload: unknown;
   parsed: Record<string, unknown>;
 };
+type BulletRewriteDecision = {
+  experience_index: number;
+  bullet_index: number;
+  outcome: 'rewritten' | 'no_relevant_match' | 'replaced';
+  rationale: string;
+};
+type MissReason = 'no_evidence' | 'evidence_not_placed';
+type TermCoverage = {
+  term: string;
+  kind: string;
+  group: string;
+  weight: number;
+  covered: boolean;
+  coverage_ratio: number;
+  matched_in?: string | null;
+  in_editable_surface: boolean;
+  miss_reason?: MissReason | null;
+};
+type CategoryCoverage = {
+  group: string;
+  covered: number;
+  partial: number;
+  total: number;
+  covered_weight: number;
+  total_weight: number;
+};
+type AtsCoverage = {
+  score: number;
+  covered_weight: number;
+  total_weight: number;
+  editable_covered_weight: number;
+  categories: CategoryCoverage[];
+  terms: TermCoverage[];
+};
 type Report = {
+  /**
+   * The tailoring model's own guess. Kept only so it can be compared against the measured
+   * score; `ats_coverage.score` is the number to trust and to show.
+   */
   estimated_ats_coverage_score: number;
+  ats_coverage?: AtsCoverage | null;
+  covered_keywords?: string[];
   omitted_unsupported_keywords: string[];
+  safety_notes?: string[];
+  bullet_rewrite_decisions?: BulletRewriteDecision[];
+};
+
+/**
+ * Falls back to the model's estimate for results stored before coverage was measured, so old
+ * runs still render a score instead of a blank.
+ */
+function coverageScore(report: Report | null): number | null {
+  if (!report) return null;
+  return report.ats_coverage?.score ?? report.estimated_ats_coverage_score;
+}
+
+const GROUP_LABELS: Record<string, string> = {
+  required: 'Required',
+  core: 'Core',
+  tools: 'Tools',
+  responsibilities: 'Responsibilities',
+  preferred: 'Preferred',
+  domain: 'Domain',
 };
 type RetailorMetadata = {
   source_variant_slug: string;
@@ -72,6 +132,7 @@ type KeywordSignal = {
   importance: number;
   evidence: string;
 };
+type TermVariants = { term: string; variants: string[] };
 type JobAnalysis = {
   role_target: string;
   seniority: string;
@@ -84,6 +145,7 @@ type JobAnalysis = {
   achievement_angles: string[];
   ats_phrase_bank: string[];
   must_not_claim_without_evidence: string[];
+  term_variants?: TermVariants[];
   summary: string;
 };
 type Analysis = JobAnalysis | { summary: string };
@@ -658,19 +720,203 @@ export function RunSummaryPanel({
             Restored from the saved artifacts for this job.
           </p>
         )}
+        <AnalysisDetail analysis={outcome.analysis} />
       </div>
       {report && (
-        <div className='min-w-[110px] text-center max-[680px]:text-left'>
-          <strong
-            className='block text-4xl text-[#176a46]'
-            data-testid='run-summary-score'
-          >
-            {report.estimated_ats_coverage_score}
-          </strong>
-          <span className='text-xs text-[#627067]'>estimated ATS coverage</span>
+        <div className='min-w-[190px] max-[680px]:text-left'>
+          <div className='text-center max-[680px]:text-left'>
+            <strong
+              className='block text-4xl text-[#176a46]'
+              data-testid='run-summary-score'
+            >
+              {coverageScore(report)}
+            </strong>
+            <span className='text-xs text-[#627067]'>
+              {report.ats_coverage
+                ? 'ATS keyword coverage'
+                : 'estimated ATS coverage'}
+            </span>
+          </div>
+          {report.ats_coverage && (
+            <CoverageBreakdown coverage={report.ats_coverage} />
+          )}
         </div>
       )}
     </section>
+  );
+}
+
+function isJobAnalysis(analysis: Analysis | null): analysis is JobAnalysis {
+  return analysis !== null && 'core_keywords' in analysis;
+}
+
+function TermList({ label, terms }: { label: string; terms: string[] }) {
+  if (terms.length === 0) return null;
+  return (
+    <div className='mt-3'>
+      <p className='m-0 text-[11px] font-bold uppercase tracking-wide text-[#8a9690]'>
+        {label}
+      </p>
+      <div className='mt-1.5 flex flex-wrap gap-1.5'>
+        {terms.map((term) => (
+          <span
+            className='rounded-full border border-[#dde3dc] bg-[#f7f9f7] px-2.5 py-1 text-[12px] text-[#3d4a41]'
+            key={term}
+          >
+            {term}
+          </span>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * The full analysis, behind a disclosure.
+ *
+ * Everything here was already extracted and used to drive tailoring, but only the one-line
+ * summary ever reached the screen. Seeing the actual keyword list is what lets the user judge
+ * whether a low score means a bad tailoring pass or a job that simply asks for things they
+ * have not done.
+ */
+function AnalysisDetail({ analysis }: { analysis: Analysis | null }) {
+  if (!isJobAnalysis(analysis)) return null;
+  const core = [...analysis.core_keywords].sort(
+    (left, right) => right.importance - left.importance,
+  );
+  return (
+    <details className='col-span-full mt-4' data-testid='analysis-detail'>
+      <summary className='cursor-pointer text-[13px] font-bold text-[#176a46]'>
+        What the job post asks for
+      </summary>
+      <div className='mt-3 rounded-[10px] border border-[#e7ebe7] bg-white p-4'>
+        <p className='m-0 text-[13px] text-[#627067]'>
+          Target role: <strong className='text-[#3d4a41]'>{analysis.role_target}</strong>
+          {analysis.seniority ? ` - ${analysis.seniority}` : ''}
+        </p>
+        {core.length > 0 && (
+          <div className='mt-3'>
+            <p className='m-0 text-[11px] font-bold uppercase tracking-wide text-[#8a9690]'>
+              Highest-priority signals
+            </p>
+            <ul className='mt-1.5 mb-0 list-none space-y-1 p-0'>
+              {core.map((signal) => (
+                <li className='text-[13px] text-[#3d4a41]' key={signal.term}>
+                  <strong>{signal.term}</strong>
+                  <span className='text-[#8a9690]'>
+                    {' '}
+                    - priority {signal.importance}/5 - {signal.evidence}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+        <TermList label='Required' terms={analysis.required_skills} />
+        <TermList label='Preferred' terms={analysis.preferred_skills} />
+        <TermList label='Tools and platforms' terms={analysis.tools_and_platforms} />
+        <TermList label='Domain' terms={analysis.domain_terms} />
+        <TermList label='Responsibilities' terms={analysis.responsibility_phrases} />
+        <TermList
+          label='Do not claim without evidence'
+          terms={analysis.must_not_claim_without_evidence}
+        />
+      </div>
+    </details>
+  );
+}
+
+/**
+ * Per-group coverage, so the score is readable as a claim about specific keywords rather than
+ * an opaque number. Weights differ by group, so the bar tracks weight while the count stays
+ * the plain "how many of them" the user actually wants.
+ */
+function CoverageBreakdown({ coverage }: { coverage: AtsCoverage }) {
+  return (
+    <div className='mt-4 space-y-1.5' data-testid='coverage-breakdown'>
+      {coverage.categories.map((category) => {
+        const percent =
+          category.total_weight === 0
+            ? 0
+            : Math.round((category.covered_weight / category.total_weight) * 100);
+        return (
+          <div key={category.group} className='text-[11px] text-[#627067]'>
+            <div className='flex items-baseline justify-between gap-2'>
+              <span>{GROUP_LABELS[category.group] ?? category.group}</span>
+              <span className='font-bold tabular-nums text-[#3d4a41]'>
+                {category.covered}/{category.total}
+                {category.partial > 0 && (
+                  <span className='font-normal text-[#8a9690]'>
+                    {' '}
+                    +{category.partial} part
+                  </span>
+                )}
+              </span>
+            </div>
+            <div
+              className='mt-0.5 h-1.5 overflow-hidden rounded-full bg-[#e2ebe4]'
+              role='presentation'
+            >
+              <div
+                className='h-full rounded-full bg-[#176a46]'
+                style={{ width: `${percent}%` }}
+              />
+            </div>
+          </div>
+        );
+      })}
+      <p
+        className='mt-2.5 mb-0 text-[11px] leading-snug text-[#8a9690]'
+        data-testid='coverage-model-estimate'
+      >
+        Measured against the generated resume.
+      </p>
+    </div>
+  );
+}
+
+/**
+ * Terms the preflight already cleared that still did not reach the document.
+ *
+ * These are the actionable misses: nothing needs attesting, the tailoring pass simply did not
+ * use them. Separating them from unsupported terms keeps the user from being asked to vouch
+ * for something they had already vouched for.
+ */
+function UnplacedTerms({ coverage }: { coverage: AtsCoverage }) {
+  const unplaced = coverage.terms.filter(
+    (term) => term.miss_reason === 'evidence_not_placed',
+  );
+  if (unplaced.length === 0) return null;
+  return (
+    <div
+      className='col-span-full border-t border-[#e7ebe7] pt-[18px]'
+      data-testid='unplaced-terms'
+    >
+      <p className='m-0 font-bold text-[#1c4f77]'>
+        Supported, but not used in this resume
+      </p>
+      <p className='mt-1.5 mb-3 max-w-[780px] text-[13px] leading-relaxed text-[#627067]'>
+        Your base resume or saved evidence already backs these, so no
+        attestation is needed. Re-tailoring, or a higher emphasis level, is what
+        gets them placed.
+      </p>
+      <div className='flex flex-wrap gap-2'>
+        {unplaced.map((term) => (
+          <span
+            className='rounded-full border border-[#b6cfe2] bg-[#f2f8fc] px-3 py-1.5 text-[13px] font-bold text-[#1c4f77]'
+            key={term.term}
+          >
+            {term.term}
+            {term.coverage_ratio > 0 && (
+              <span className='font-normal text-[#5b7c96]'>
+                {' '}
+                - {Math.round(term.coverage_ratio * 100)}% present
+              </span>
+            )}
+          </span>
+        ))}
+      </div>
+    </div>
   );
 }
 
@@ -702,6 +948,14 @@ export function ResultPanel({
   const omittedKeywords = Array.isArray(report?.omitted_unsupported_keywords)
     ? report.omitted_unsupported_keywords
     : [];
+  const replacedBullets = (report?.bullet_rewrite_decisions ?? [])
+    .filter((decision) => decision.outcome === 'replaced')
+    .map((decision) => {
+      const path = `/experience/${decision.experience_index}/bullets/${decision.bullet_index}`;
+      const change = contentChanges.find((entry) => entry.path === path);
+      return { ...decision, before: change?.before ?? '', after: change?.after ?? '' };
+    })
+    .filter((entry) => entry.after !== '');
   const hasPdf = resume.artifact
     ? resume.artifact.format === 'pdf'
     : Boolean(resume.latest_pdf_path);
@@ -709,9 +963,10 @@ export function ResultPanel({
     ? resume.artifact.format === 'docx'
     : Boolean(resume.latest_docx_path);
   const artifactFormat: 'pdf' | 'docx' = hasPdf ? 'pdf' : 'docx';
+  const currentScore = coverageScore(report);
   const scoreDelta =
-    report && resume.retailor
-      ? report.estimated_ats_coverage_score - resume.retailor.source_ats_score
+    currentScore !== null && resume.retailor
+      ? currentScore - resume.retailor.source_ats_score
       : null;
   const saveMessage = hasPdf
     ? resume.downloads_pdf_path
@@ -741,19 +996,26 @@ export function ResultPanel({
         <p className={mutedClass}>{saveMessage}</p>
         <p className='mt-3.5 mb-0 text-[13px] font-bold capitalize text-[#176a46]'>
           {resume.experience_bullets_changed} experience bullets{' '}
-          {resume.bullet_keyword_emphasis === 'high'
+          {resume.bullet_keyword_emphasis === 'high' ||
+          resume.bullet_keyword_emphasis === 'max'
             ? 'rewritten before skills'
-            : 'tailored'}{' '}
+            : 'tailored'}
+          {replacedBullets.length > 0
+            ? `, ${replacedBullets.length} replaced outright`
+            : ''}{' '}
           - {resume.bullet_keyword_emphasis} emphasis
         </p>
-        {report && resume.retailor && scoreDelta !== null && (
+        {resume.retailor && scoreDelta !== null && (
           <p
-            className='mt-3.5 mb-0 text-[13px] font-bold text-[#176a46]'
+            className={`mt-3.5 mb-0 text-[13px] font-bold ${
+              scoreDelta < 0 ? 'text-[#9e411e]' : 'text-[#176a46]'
+            }`}
             data-testid='retailor-score-delta'
           >
-            Previous {resume.retailor.source_ats_score} → current{' '}
-            {report.estimated_ats_coverage_score} ({scoreDelta >= 0 ? '+' : ''}
+            Previous {resume.retailor.source_ats_score} → current {currentScore}{' '}
+            ({scoreDelta >= 0 ? '+' : ''}
             {scoreDelta})
+            {scoreDelta < 0 ? ' - this variant covers fewer job keywords' : ''}
           </p>
         )}
         {resume.error && (
@@ -821,6 +1083,40 @@ export function ResultPanel({
           </button>
         </div>
       )}
+      {replacedBullets.length > 0 && (
+        <div
+          className='col-span-full border-t border-[#e7ebe7] pt-[18px]'
+          data-testid='replaced-bullets'
+        >
+          <p className='m-0 font-bold text-[#12673d]'>
+            Replaced bullets ({replacedBullets.length})
+          </p>
+          <p className='mt-1.5 mb-3 max-w-[780px] text-[13px] leading-relaxed text-[#627067]'>
+            Max emphasis swapped these bullets for new ones aimed at this job.
+            Read each one before you send the resume - you have to be able to
+            stand behind it in an interview.
+          </p>
+          <ul className='m-0 grid list-none gap-3 p-0'>
+            {replacedBullets.map((entry) => (
+              <li
+                className='rounded-lg border border-[#dde3dc] bg-[#f8faf8] p-3'
+                key={`${entry.experience_index}-${entry.bullet_index}`}
+              >
+                <p className='m-0 text-[12px] leading-relaxed text-[#8b968d] line-through'>
+                  {entry.before}
+                </p>
+                <p className='mt-1.5 mb-0 text-[13px] leading-relaxed font-bold text-[#19221d]'>
+                  {entry.after}
+                </p>
+                <p className='mt-1.5 mb-0 text-[12px] leading-relaxed text-[#627067]'>
+                  {entry.rationale}
+                </p>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+      {report?.ats_coverage && <UnplacedTerms coverage={report.ats_coverage} />}
       {omittedKeywords.length > 0 && (
         <div className='col-span-full border-t border-[#e7ebe7] pt-[18px]'>
           <p className='m-0 font-bold text-[#6f5521]'>Still not added</p>
@@ -869,7 +1165,8 @@ export function ResultPanel({
       )}
       {omittedKeywords.length === 0 && resume.retailor && (
         <p className='col-span-full m-0 border-t border-[#e7ebe7] pt-[18px] font-bold text-[#176a46]'>
-          All selected claims were added to this variant.
+          Every job keyword this resume can truthfully carry is now in the
+          document.
         </p>
       )}
       {resume.tailored_content !== null && (
@@ -1972,7 +2269,7 @@ export function App() {
                     role='group'
                     aria-label='Experience keyword emphasis'
                   >
-                    {(['high'] as const).map((level) => (
+                    {(['high', 'max'] as const).map((level) => (
                       <button
                         className={`cursor-pointer border-0 px-[13px] py-[11px] font-bold capitalize ${
                           level === 'high' ? '' : 'border-l border-[#cbd4cc]'
@@ -1990,8 +2287,9 @@ export function App() {
                     ))}
                   </div>
                   <small className='max-w-[245px] text-[11px] leading-tight text-[#627067]'>
-                    Higher levels spread supported job language across more
-                    relevant bullets.
+                    High rewrites every bullet with supported job language. Max
+                    also swaps 1-3 low-relevance bullets for new ones aimed at
+                    this job.
                   </small>
                 </div>
               )}

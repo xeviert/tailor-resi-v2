@@ -407,6 +407,35 @@ pub(crate) fn parse_job_data(payload: &serde_json::Value) -> serde_json::Value {
     }
 }
 
+/// Fields that carry no ATS signal, or that duplicate a field the model already gets.
+///
+/// `description_html` is the same prose as `description` wrapped in markup, and for a
+/// Welcome to the Jungle capture it is the single largest field in the payload. `raw` is the
+/// whole original extension payload, re-embedded by the unknown-domain fallback. Both prompts
+/// are built from the same parsed capture, so anything left here is paid for on every
+/// tailoring attempt as well as on analysis.
+const PROMPT_IRRELEVANT_FIELDS: &[&str] = &[
+    "description_html",
+    "raw",
+    "company_logo",
+    "parsed",
+    "warnings",
+];
+
+/// The view of a parsed capture that goes into an LLM prompt.
+pub fn prompt_job_view(parsed: &serde_json::Value) -> serde_json::Value {
+    let Some(object) = parsed.as_object() else {
+        return parsed.clone();
+    };
+    object
+        .iter()
+        .filter(|(key, _)| !PROMPT_IRRELEVANT_FIELDS.contains(&key.as_str()))
+        .filter(|(_, value)| !value.is_null())
+        .map(|(key, value)| (key.clone(), value.clone()))
+        .collect::<serde_json::Map<_, _>>()
+        .into()
+}
+
 fn capture_directory() -> Result<PathBuf, String> {
     crate::tailoring::workspace_root()
         .map(|root| root.join("data").join("job-captures"))
@@ -893,7 +922,8 @@ pub async fn start_server(app_handle: AppHandle) {
 #[cfg(test)]
 mod tests {
     use super::{
-        html_to_text, parse_job_data, parse_latest_capture, write_latest_capture, CapturedJob,
+        html_to_text, parse_job_data, parse_latest_capture, prompt_job_view, write_latest_capture,
+        CapturedJob,
     };
     use serde_json::json;
     use std::{
@@ -997,7 +1027,9 @@ mod tests {
     #[test]
     fn html_to_text_strips_tags_and_decodes_entities() {
         assert_eq!(
-            html_to_text("<h3><strong>Notre &eacute;quipe</strong></h3><p>90 ing&eacute;nieurs</p>"),
+            html_to_text(
+                "<h3><strong>Notre &eacute;quipe</strong></h3><p>90 ing&eacute;nieurs</p>"
+            ),
             "Notre \u{e9}quipe 90 ing\u{e9}nieurs"
         );
         // Adjacent block elements must not glue words together.
@@ -1059,5 +1091,53 @@ mod tests {
         assert_eq!(fs::read_to_string(&latest).unwrap(), "{\"version\":2}\n");
         assert_eq!(fs::read_dir(&directory).unwrap().count(), 1);
         fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn prompt_job_view_drops_the_duplicate_html_description() {
+        let parsed = serde_json::json!({
+            "title": "Lead Front Engineer",
+            "description": "Build services.",
+            "description_html": "<p>Build services.</p>",
+            "company_logo": "https://example.test/logo.png",
+            "parsed": true,
+            "warnings": [],
+            "location": serde_json::Value::Null,
+            "url": "https://example.test/job"
+        });
+
+        let view = prompt_job_view(&parsed);
+
+        assert_eq!(view["description"], "Build services.");
+        assert_eq!(view["title"], "Lead Front Engineer");
+        assert_eq!(view["url"], "https://example.test/job");
+        for dropped in [
+            "description_html",
+            "company_logo",
+            "parsed",
+            "warnings",
+            "location",
+        ] {
+            assert!(view.get(dropped).is_none(), "{dropped} should not be sent");
+        }
+    }
+
+    #[test]
+    fn prompt_job_view_drops_the_raw_payload_the_fallback_parser_embeds() {
+        let parsed = parse_job_data(&serde_json::json!({
+            "sourceUrl": "https://jobs.example.test/posting/1",
+            "json": { "title": "Engineer", "description": "Ship things.", "company": "Acme" }
+        }));
+
+        assert!(parsed.get("raw").is_some(), "the fallback still stores it");
+        assert!(prompt_job_view(&parsed).get("raw").is_none());
+    }
+
+    #[test]
+    fn prompt_job_view_passes_through_a_non_object() {
+        assert_eq!(
+            prompt_job_view(&serde_json::json!("not an object")),
+            serde_json::json!("not an object")
+        );
     }
 }

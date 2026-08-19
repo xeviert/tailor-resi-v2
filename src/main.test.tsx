@@ -141,6 +141,74 @@ describe('always-visible run summary', () => {
     );
   });
 
+  it('discloses bullets that max emphasis replaced outright', () => {
+    const resume = {
+      ...completedResume(),
+      bullet_keyword_emphasis: 'max' as const,
+      experience_bullets_changed: 3,
+      report: {
+        estimated_ats_coverage_score: 88,
+        omitted_unsupported_keywords: [],
+        bullet_rewrite_decisions: [
+          {
+            experience_index: 0,
+            bullet_index: 0,
+            outcome: 'rewritten' as const,
+            rationale: 'Added supported job language.',
+          },
+          {
+            experience_index: 1,
+            bullet_index: 0,
+            outcome: 'replaced' as const,
+            rationale: 'Targets event-driven architecture, grounded in the Node.js stack.',
+          },
+        ],
+      },
+      content_changes: [
+        {
+          path: '/experience/1/bullets/0',
+          before: 'Contributed to backend development with NestJS.',
+          after: 'Designed event-driven service boundaries across the NestJS backend.',
+        },
+      ],
+    };
+
+    render(<ResultPanel result={{ analysis, resume }} action={vi.fn()} />);
+
+    const panel = screen.getByTestId('replaced-bullets');
+    expect(panel).toBeVisible();
+    expect(panel).toHaveTextContent('Replaced bullets (1)');
+    expect(panel).toHaveTextContent(
+      'Designed event-driven service boundaries across the NestJS backend.',
+    );
+    expect(panel).toHaveTextContent('Contributed to backend development with NestJS.');
+    expect(panel).toHaveTextContent('Targets event-driven architecture');
+    expect(screen.getByText(/1 replaced outright/)).toBeVisible();
+  });
+
+  it('omits the replaced-bullet block when nothing was replaced', () => {
+    const resume = {
+      ...completedResume(),
+      bullet_keyword_emphasis: 'high' as const,
+      report: {
+        estimated_ats_coverage_score: 84,
+        omitted_unsupported_keywords: [],
+        bullet_rewrite_decisions: [
+          {
+            experience_index: 0,
+            bullet_index: 0,
+            outcome: 'rewritten' as const,
+            rationale: 'Added supported job language.',
+          },
+        ],
+      },
+    };
+
+    render(<ResultPanel result={{ analysis, resume }} action={vi.fn()} />);
+
+    expect(screen.queryByTestId('replaced-bullets')).toBeNull();
+  });
+
   it('renders omitted phrases as selectable pills and shows the re-tailor score delta', () => {
     const action = vi.fn();
     const onToggle = vi.fn();
@@ -261,5 +329,277 @@ describe('outcomeSignature', () => {
         localOutcome({ captureId: 2, language: 'en', analysis, resume: completedResume() }),
       ),
     ).not.toBe(outcomeSignature(stored));
+  });
+});
+
+describe('measured ATS coverage', () => {
+  const coverage = {
+    score: 62,
+    covered_weight: 13,
+    total_weight: 21,
+    editable_covered_weight: 8,
+    categories: [
+      {
+        group: 'required',
+        covered: 2,
+        partial: 1,
+        total: 3,
+        covered_weight: 10,
+        total_weight: 15,
+      },
+      {
+        group: 'domain',
+        covered: 1,
+        partial: 0,
+        total: 2,
+        covered_weight: 3,
+        total_weight: 6,
+      },
+    ],
+    terms: [
+      {
+        term: 'Kubernetes',
+        kind: 'technology',
+        group: 'required',
+        weight: 5,
+        covered: false,
+        coverage_ratio: 0,
+        in_editable_surface: false,
+        miss_reason: 'no_evidence' as const,
+      },
+      {
+        term: 'GraphQL',
+        kind: 'technology',
+        group: 'required',
+        weight: 5,
+        covered: false,
+        coverage_ratio: 0.5,
+        in_editable_surface: false,
+        miss_reason: 'evidence_not_placed' as const,
+      },
+      {
+        term: 'React',
+        kind: 'technology',
+        group: 'required',
+        weight: 5,
+        covered: true,
+        coverage_ratio: 1,
+        matched_in: 'experience.0.bullets.0',
+        in_editable_surface: true,
+      },
+    ],
+  };
+
+  it('shows the measured score rather than the model estimate', () => {
+    const resume = {
+      ...completedResume(),
+      report: {
+        estimated_ats_coverage_score: 91,
+        ats_coverage: coverage,
+        omitted_unsupported_keywords: ['Kubernetes'],
+      },
+    };
+    const outcome = localOutcome({
+      captureId: 9,
+      language: 'en',
+      analysis,
+      resume,
+    });
+    render(<RunSummaryPanel outcome={outcome} />);
+
+    // 91 is the model's own guess; 62 is what the produced document actually covers.
+    expect(screen.getByTestId('run-summary-score')).toHaveTextContent('62');
+    expect(screen.getByTestId('run-summary-score')).not.toHaveTextContent('91');
+    expect(screen.getByText('ATS keyword coverage')).toBeVisible();
+  });
+
+  it('shows partial matches beside full ones so a phrase group does not read as a total failure', () => {
+    const resume = {
+      ...completedResume(),
+      report: {
+        estimated_ats_coverage_score: 91,
+        ats_coverage: coverage,
+        omitted_unsupported_keywords: [],
+      },
+    };
+    const outcome = localOutcome({
+      captureId: 14,
+      language: 'en',
+      analysis,
+      resume,
+    });
+    render(<RunSummaryPanel outcome={outcome} />);
+
+    expect(screen.getByTestId('coverage-breakdown')).toHaveTextContent(
+      '2/3 +1 part',
+    );
+  });
+
+  it('reports how much of a partly-present term the resume already carries', () => {
+    const resume = {
+      ...completedResume(),
+      report: {
+        estimated_ats_coverage_score: 91,
+        ats_coverage: coverage,
+        omitted_unsupported_keywords: [],
+      },
+    };
+    render(<ResultPanel result={{ analysis, resume }} action={vi.fn()} />);
+
+    // GraphQL sits at 0.5, so telling the user it is half-present is more useful than
+    // listing it as simply absent.
+    expect(screen.getByTestId('unplaced-terms')).toHaveTextContent(
+      'GraphQL - 50% present',
+    );
+  });
+
+  it('breaks coverage down by group', () => {
+    const resume = {
+      ...completedResume(),
+      report: {
+        estimated_ats_coverage_score: 91,
+        ats_coverage: coverage,
+        omitted_unsupported_keywords: [],
+      },
+    };
+    const outcome = localOutcome({
+      captureId: 10,
+      language: 'en',
+      analysis,
+      resume,
+    });
+    render(<RunSummaryPanel outcome={outcome} />);
+
+    const breakdown = screen.getByTestId('coverage-breakdown');
+    expect(breakdown).toHaveTextContent('Required');
+    expect(breakdown).toHaveTextContent('2/3');
+    expect(breakdown).toHaveTextContent('Domain');
+    expect(breakdown).toHaveTextContent('1/2');
+  });
+
+  it('falls back to the model estimate for a result stored before scoring existed', () => {
+    const outcome = localOutcome({
+      captureId: 11,
+      language: 'en',
+      analysis,
+      resume: completedResume(),
+    });
+    render(<RunSummaryPanel outcome={outcome} />);
+
+    expect(screen.getByTestId('run-summary-score')).toHaveTextContent('84');
+    expect(screen.getByText('estimated ATS coverage')).toBeVisible();
+    expect(screen.queryByTestId('coverage-breakdown')).toBeNull();
+  });
+
+  it('separates supported-but-unplaced terms from terms needing attestation', () => {
+    const resume = {
+      ...completedResume(),
+      report: {
+        estimated_ats_coverage_score: 91,
+        ats_coverage: coverage,
+        omitted_unsupported_keywords: ['Kubernetes'],
+      },
+    };
+    render(<ResultPanel result={{ analysis, resume }} action={vi.fn()} />);
+
+    // GraphQL is already backed by evidence, so it must not be presented as something the
+    // user has to vouch for.
+    const unplaced = screen.getByTestId('unplaced-terms');
+    expect(unplaced).toHaveTextContent('GraphQL');
+    expect(unplaced).not.toHaveTextContent('Kubernetes');
+    expect(
+      screen.getByRole('button', { name: 'Kubernetes' }),
+    ).toBeVisible();
+  });
+
+  it('omits the unplaced block when every supported term was used', () => {
+    const resume = {
+      ...completedResume(),
+      report: {
+        estimated_ats_coverage_score: 91,
+        ats_coverage: { ...coverage, terms: [coverage.terms[2]] },
+        omitted_unsupported_keywords: [],
+      },
+    };
+    render(<ResultPanel result={{ analysis, resume }} action={vi.fn()} />);
+
+    expect(screen.queryByTestId('unplaced-terms')).toBeNull();
+  });
+
+  it('marks a re-tailor that lost coverage as a regression', () => {
+    const resume = {
+      ...completedResume(),
+      report: {
+        estimated_ats_coverage_score: 91,
+        ats_coverage: coverage,
+        omitted_unsupported_keywords: [],
+      },
+      retailor: {
+        source_variant_slug: 'source-role-en',
+        source_ats_score: 70,
+        selected_terms: ['GraphQL'],
+      },
+    };
+    render(<ResultPanel result={{ analysis, resume }} action={vi.fn()} />);
+
+    const delta = screen.getByTestId('retailor-score-delta');
+    expect(delta).toHaveTextContent('Previous 70 → current 62 (-8)');
+    expect(delta).toHaveTextContent('covers fewer job keywords');
+    // A loss must not be styled like a win.
+    expect(delta.className).toContain('#9e411e');
+  });
+});
+
+describe('analysis detail', () => {
+  const fullAnalysis = {
+    role_target: 'Lead Front Engineer',
+    seniority: 'Senior',
+    core_keywords: [
+      {
+        term: 'React',
+        category: 'technology',
+        importance: 5,
+        evidence: 'Named in the requirements list',
+      },
+      {
+        term: 'Grafana',
+        category: 'technology',
+        importance: 2,
+        evidence: 'Mentioned once under nice-to-have',
+      },
+    ],
+    required_skills: ['TypeScript'],
+    preferred_skills: ['Svelte'],
+    tools_and_platforms: ['Docker'],
+    domain_terms: ['Fintech'],
+    responsibility_phrases: ['Lead a front-end team'],
+    achievement_angles: [],
+    ats_phrase_bank: [],
+    must_not_claim_without_evidence: ['Kubernetes'],
+    summary: 'Prioritize front-end leadership.',
+  };
+
+  it('surfaces the extracted keywords behind a disclosure', () => {
+    const outcome = localOutcome({
+      captureId: 12,
+      language: 'en',
+      analysis: fullAnalysis,
+    });
+    render(<RunSummaryPanel outcome={outcome} />);
+
+    const detail = screen.getByTestId('analysis-detail');
+    expect(detail).toHaveTextContent('Lead Front Engineer');
+    expect(detail).toHaveTextContent('React');
+    expect(detail).toHaveTextContent('priority 5/5');
+    expect(detail).toHaveTextContent('TypeScript');
+    expect(detail).toHaveTextContent('Fintech');
+    expect(detail).toHaveTextContent('Kubernetes');
+  });
+
+  it('is left out when only a summary is available', () => {
+    const outcome = localOutcome({ captureId: 13, language: 'en', analysis });
+    render(<RunSummaryPanel outcome={outcome} />);
+
+    expect(screen.queryByTestId('analysis-detail')).toBeNull();
   });
 });

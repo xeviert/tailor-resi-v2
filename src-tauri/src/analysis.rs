@@ -1,4 +1,5 @@
 use crate::api_usage::record_response_usage;
+use crate::http::{retry_delay, shared_client, status_is_retryable};
 use reqwest::StatusCode;
 use serde::{Deserialize, Serialize};
 
@@ -39,6 +40,18 @@ pub struct KeywordSignal {
     pub evidence: String,
 }
 
+/// Alternate written forms of a term that an ATS would treat as different strings.
+///
+/// Keyword matching is literal, so "Kubernetes" and "K8s", or "CI/CD" and "continuous
+/// integration", score as separate things even though they name one capability. Collecting the
+/// variants lets coverage be measured against whichever form the resume happens to use, and
+/// lets tailoring prefer the form the job post itself wrote.
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+pub struct TermVariants {
+    pub term: String,
+    pub variants: Vec<String>,
+}
+
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub struct JobAnalysis {
     pub role_target: String,
@@ -52,6 +65,9 @@ pub struct JobAnalysis {
     pub achievement_angles: Vec<String>,
     pub ats_phrase_bank: Vec<String>,
     pub must_not_claim_without_evidence: Vec<String>,
+    /// Empty for an analysis stored before variants existed.
+    #[serde(default)]
+    pub term_variants: Vec<TermVariants>,
     pub summary: String,
 }
 
@@ -69,10 +85,15 @@ pub enum AnalysisError {
     EmptyOutputText,
     #[error("OpenAI analysis JSON was invalid: {0}")]
     InvalidJson(String),
+    #[error("OpenAI stopped early ({0}); the analysis is incomplete")]
+    IncompleteResponse(String),
+    #[error("OpenAI declined to analyze this job post: {0}")]
+    Refused(String),
 }
 
 pub fn build_analysis_prompt(parsed_job: &serde_json::Value) -> String {
-    let compact_job = serde_json::to_string(parsed_job).unwrap_or_else(|_| "{}".to_string());
+    let compact_job = serde_json::to_string(&crate::server::prompt_job_view(parsed_job))
+        .unwrap_or_else(|_| "{}".to_string());
     format!(
         "Analyze this normalized job post for ATS resume-tailoring signals.\n\
          Return only the schema fields. Ground every keyword and phrase in the job post.\n\
@@ -81,9 +102,13 @@ pub fn build_analysis_prompt(parsed_job: &serde_json::Value) -> String {
          Prefer exact technology, framework, certification, and domain wording when useful.\n\
          Semantically deduplicate terms across every array; choose one clear ATS-friendly label per capability.\n\
          Do not put job titles, company names, generic personality traits, or full requirement sentences in capability arrays.\n\
+         This applies to responsibility_phrases too: write the capability, not the sentence. Prefer a bare capability like pair programming over a sentence like intervenir en pair programming, and revue de code over realiser des revues approfondies. Drop leading verbs, articles, and adverbs; keep the noun phrase a resume would actually contain.\n\
          Classify tools and frameworks as technology, working methods and business domains as method_domain, and claims about actions performed as responsibility.\n\
+         Weight terms by how the post asks for them: a term in a requirements or must-have section, or repeated across the post, outranks one mentioned once in company boilerplate, benefits, or an equal-opportunity notice.\n\
+         Be thorough rather than selective. Extract every distinct capability the post asks for, up to the schema limits; a term you leave out cannot be matched later.\n\
+         In term_variants, list the alternate written forms of any extracted term that a literal keyword matcher would treat as a different string: acronym and expansion (Kubernetes / K8s, continuous integration / CI/CD), common spellings (PostgreSQL / Postgres), and the job post's own wording when it differs from your chosen label. Only list forms that mean the same capability; do not list related or broader technologies.\n\
          Focus on analysis for a later resume-writing layer; do not rewrite resume bullets.\n\
-         Write every extracted field (role_target, seniority, core_keywords terms and evidence, required_skills, preferred_skills, tools_and_platforms, domain_terms, responsibility_phrases, achievement_angles, ats_phrase_bank, must_not_claim_without_evidence, and summary) in the same language as the job post itself. Do not translate the job post's language into English or any other language.\n\n\
+         Write every extracted field (role_target, seniority, core_keywords terms and evidence, required_skills, preferred_skills, tools_and_platforms, domain_terms, responsibility_phrases, achievement_angles, ats_phrase_bank, must_not_claim_without_evidence, term_variants, and summary) in the same language as the job post itself. Do not translate the job post's language into English or any other language.\n\n\
          Normalized job JSON:\n{compact_job}"
     )
 }
@@ -104,6 +129,7 @@ fn analysis_schema() -> serde_json::Value {
             "achievement_angles",
             "ats_phrase_bank",
             "must_not_claim_without_evidence",
+            "term_variants",
             "summary"
         ],
         "properties": {
@@ -111,27 +137,43 @@ fn analysis_schema() -> serde_json::Value {
             "seniority": { "type": "string" },
             "core_keywords": {
                 "type": "array",
-                "maxItems": 12,
+                "maxItems": 20,
                 "items": {
                     "type": "object",
                     "additionalProperties": false,
                     "required": ["term", "category", "importance", "evidence"],
                     "properties": {
                         "term": { "type": "string" },
-                        "category": { "type": "string" },
+                        "category": {
+                            "type": "string",
+                            "enum": ["technology", "method_domain", "responsibility"]
+                        },
                         "importance": { "type": "integer", "minimum": 1, "maximum": 5 },
                         "evidence": { "type": "string" }
                     }
                 }
             },
-            "required_skills": { "type": "array", "maxItems": 10, "items": { "type": "string" } },
+            "required_skills": { "type": "array", "maxItems": 16, "items": { "type": "string" } },
             "preferred_skills": { "type": "array", "maxItems": 8, "items": { "type": "string" } },
-            "tools_and_platforms": { "type": "array", "maxItems": 12, "items": { "type": "string" } },
+            "tools_and_platforms": { "type": "array", "maxItems": 18, "items": { "type": "string" } },
             "domain_terms": { "type": "array", "maxItems": 8, "items": { "type": "string" } },
             "responsibility_phrases": { "type": "array", "maxItems": 8, "items": { "type": "string" } },
             "achievement_angles": { "type": "array", "maxItems": 8, "items": { "type": "string" } },
             "ats_phrase_bank": { "type": "array", "maxItems": 15, "items": { "type": "string" } },
             "must_not_claim_without_evidence": { "type": "array", "maxItems": 12, "items": { "type": "string" } },
+            "term_variants": {
+                "type": "array",
+                "maxItems": 24,
+                "items": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["term", "variants"],
+                    "properties": {
+                        "term": { "type": "string" },
+                        "variants": { "type": "array", "maxItems": 4, "items": { "type": "string" } }
+                    }
+                }
+            },
             "summary": { "type": "string" }
         }
     })
@@ -161,35 +203,61 @@ fn build_openai_request(model: &str, parsed_job: &serde_json::Value) -> serde_js
     })
 }
 
+/// Analysis is a single API call with no correction loop behind it, so a transient rate limit
+/// or a 503 would otherwise fail the whole run and force the user to re-analyze by hand.
+const MAX_ANALYSIS_ATTEMPTS: u32 = 3;
+
 pub async fn analyze_job(
     config: &AnalysisConfig,
     parsed_job: &serde_json::Value,
 ) -> Result<JobAnalysis, AnalysisError> {
-    let client = reqwest::Client::new();
     let request_body = build_openai_request(&config.model, parsed_job);
     let url = format!("{}/responses", config.base_url.trim_end_matches('/'));
+    let mut last_error = None;
 
-    let response = client
-        .post(url)
-        .bearer_auth(&config.api_key)
-        .json(&request_body)
-        .send()
-        .await
-        .map_err(|error| AnalysisError::Request(error.to_string()))?;
+    for attempt in 0..MAX_ANALYSIS_ATTEMPTS {
+        if attempt > 0 {
+            tokio::time::sleep(retry_delay(attempt - 1)).await;
+        }
 
-    let status = response.status();
-    let body = response
-        .text()
-        .await
-        .map_err(|error| AnalysisError::Request(error.to_string()))?;
+        let response = match shared_client()
+            .post(&url)
+            .bearer_auth(&config.api_key)
+            .json(&request_body)
+            .send()
+            .await
+        {
+            Ok(response) => response,
+            Err(error) => {
+                last_error = Some(AnalysisError::Request(error.to_string()));
+                continue;
+            }
+        };
 
-    if !status.is_success() {
-        return Err(AnalysisError::Http { status, body });
+        let status = response.status();
+        let body = match response.text().await {
+            Ok(body) => body,
+            Err(error) => {
+                last_error = Some(AnalysisError::Request(error.to_string()));
+                continue;
+            }
+        };
+
+        if !status.is_success() {
+            let error = AnalysisError::Http { status, body };
+            if status_is_retryable(status) {
+                last_error = Some(error);
+                continue;
+            }
+            return Err(error);
+        }
+
+        let analysis = parse_job_analysis_from_response(&body)?;
+        record_response_usage("job_analysis", &config.model, &body);
+        return Ok(analysis);
     }
 
-    let analysis = parse_job_analysis_from_response(&body)?;
-    record_response_usage("job_analysis", &config.model, &body);
-    Ok(analysis)
+    Err(last_error.unwrap_or_else(|| AnalysisError::Request("no attempt was made".to_string())))
 }
 
 pub fn parse_job_analysis_from_response(body: &str) -> Result<JobAnalysis, AnalysisError> {
@@ -199,11 +267,51 @@ pub fn parse_job_analysis_from_response(body: &str) -> Result<JobAnalysis, Analy
     let response: serde_json::Value = serde_json::from_str(body)
         .map_err(|error| AnalysisError::InvalidJson(error.to_string()))?;
 
-    let text = find_output_text(&response).ok_or(AnalysisError::MissingOutputText)?;
+    if let Some(refusal) = find_refusal(&response) {
+        return Err(AnalysisError::Refused(refusal.to_string()));
+    }
+    let text = match find_output_text(&response) {
+        Some(text) => text,
+        None => {
+            // A response truncated by the token limit has no `output_text` at all. Reporting
+            // that as invalid JSON sends the reader looking for a schema bug that isn't there.
+            return Err(match incomplete_reason(&response) {
+                Some(reason) => AnalysisError::IncompleteResponse(reason.to_string()),
+                None => AnalysisError::MissingOutputText,
+            });
+        }
+    };
     if text.trim().is_empty() {
         return Err(AnalysisError::EmptyOutputText);
     }
+    if let Some(reason) = incomplete_reason(&response) {
+        return Err(AnalysisError::IncompleteResponse(reason.to_string()));
+    }
     serde_json::from_str(text).map_err(|error| AnalysisError::InvalidJson(error.to_string()))
+}
+
+/// `Some(reason)` when the model stopped before finishing, e.g. `"max_output_tokens"`.
+pub(crate) fn incomplete_reason(response: &serde_json::Value) -> Option<&str> {
+    if response["status"].as_str() != Some("incomplete") {
+        return None;
+    }
+    Some(
+        response["incomplete_details"]["reason"]
+            .as_str()
+            .unwrap_or("reason unknown"),
+    )
+}
+
+pub(crate) fn find_refusal(response: &serde_json::Value) -> Option<&str> {
+    response["output"].as_array()?.iter().find_map(|item| {
+        item["content"].as_array()?.iter().find_map(|content| {
+            if content["type"].as_str() == Some("refusal") {
+                content["refusal"].as_str()
+            } else {
+                None
+            }
+        })
+    })
 }
 
 fn find_output_text(response: &serde_json::Value) -> Option<&str> {
@@ -286,5 +394,49 @@ mod tests {
     fn rejects_an_empty_responses_api_body() {
         let err = parse_job_analysis_from_response("  \n").unwrap_err();
         assert!(err.to_string().contains("empty response body"));
+    }
+
+    #[test]
+    fn reports_a_truncated_response_as_incomplete_not_as_bad_json() {
+        let body = json!({
+            "status": "incomplete",
+            "incomplete_details": { "reason": "max_output_tokens" },
+            "output": []
+        })
+        .to_string();
+
+        let error = parse_job_analysis_from_response(&body).unwrap_err();
+        let message = error.to_string();
+
+        assert!(message.contains("incomplete"), "{message}");
+        assert!(message.contains("max_output_tokens"), "{message}");
+        assert!(!message.contains("invalid"), "{message}");
+    }
+
+    #[test]
+    fn reports_a_refusal_distinctly() {
+        let body = json!({
+            "output": [{
+                "type": "message",
+                "content": [{ "type": "refusal", "refusal": "I cannot help with that." }]
+            }]
+        })
+        .to_string();
+
+        let error = parse_job_analysis_from_response(&body).unwrap_err();
+        assert!(error.to_string().contains("declined"), "{error}");
+    }
+
+    #[test]
+    fn analysis_prompt_omits_the_duplicate_html_description() {
+        let prompt = build_analysis_prompt(&json!({
+            "title": "Rust Engineer",
+            "description": "Build APIs with Rust and Axum.",
+            "description_html": "<p>Build APIs with Rust and Axum.</p>"
+        }));
+
+        assert!(prompt.contains("Build APIs with Rust and Axum."));
+        assert!(!prompt.contains("description_html"));
+        assert!(!prompt.contains("<p>"));
     }
 }

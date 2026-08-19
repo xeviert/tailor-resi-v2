@@ -2,15 +2,16 @@ use crate::{
     analysis::{analyze_job, AnalysisConfig, JobAnalysis},
     error::AppError,
     evidence::{
-        equivalent_terms, infer_selected_term_kind, load_evidence_bank, placement_equivalent_terms,
-        preflight_items, remove_evidence, save_selected_evidence, selected_for_prompt,
-        EvidenceBank, EvidenceEntry, PreflightItem, SelectedEvidence,
+        append_banked_terms, approved_evidence_for, equivalent_terms, infer_selected_term_kind,
+        load_evidence_bank, placement_equivalent_terms, preflight_items, remove_evidence,
+        save_selected_evidence, EvidenceBank, EvidenceEntry, PreflightItem, SelectedEvidence,
     },
     server::{load_latest_capture, CapturedJob},
     tailoring::{
         content_changes, failed_response, load_base_resume, publish_variant_artifact,
         tailor_and_render_with_progress, workspace_root, ArtifactProvenance, BulletKeywordEmphasis,
-        PipelineProgress, RetailorMetadata, TailorRequest, TailorResponse, TailoringReport,
+        BulletRewriteOutcome, PipelineProgress, RetailorMetadata, TailorRequest, TailorResponse,
+        TailoringReport,
     },
 };
 use serde::{Deserialize, Serialize};
@@ -145,6 +146,23 @@ fn prepare_preflight_result(
         items: preflight_items(&analysis, &base_resume, &bank),
         analysis,
     })
+}
+
+/// Saves this session's confirmations, then assembles everything the tailoring model is
+/// allowed to rely on: the freshly confirmed terms plus every previously attested bank entry
+/// the preflight resolved for this job.
+fn build_approved_evidence(
+    root: &Path,
+    language: &str,
+    analysis: &JobAnalysis,
+    selected: &[SelectedEvidence],
+) -> Result<Vec<EvidenceEntry>, AppError> {
+    let bank = save_selected_evidence(root, selected)
+        .map_err(|error| AppError::Message(error.to_string()))?;
+    let base_resume =
+        load_base_resume(root, language).map_err(|error| AppError::Message(error.to_string()))?;
+    let preflight = preflight_items(analysis, &base_resume, &bank);
+    Ok(approved_evidence_for(&preflight, &bank, selected))
 }
 
 #[derive(Deserialize)]
@@ -507,35 +525,39 @@ pub async fn generate_tailored_resume(
         attempt: None,
         total_attempts: None,
     });
-    if let Err(error) = save_selected_evidence(&root, &request.selected_evidence) {
-        let message = error.to_string();
-        reporter(PipelineProgress {
-            stage: "resume_tailoring",
-            status: "failed",
-            message: message.clone(),
-            attempt: None,
-            total_attempts: None,
-        });
-        store_and_emit_outcome(
-            &app,
-            &root,
-            capture_id,
-            &language,
-            "failed",
-            failure_summary("evidence_save", &message, Some(&analysis)),
-            Some(&analysis),
-            None,
-            Some("evidence_save"),
-            Some(message.clone()),
-        )?;
-        return Err(AppError::Message(message));
-    }
+    let approved_evidence =
+        match build_approved_evidence(&root, &language, &analysis, &request.selected_evidence) {
+            Ok(approved) => approved,
+            Err(error) => {
+                let message = error.to_string();
+                reporter(PipelineProgress {
+                    stage: "resume_tailoring",
+                    status: "failed",
+                    message: message.clone(),
+                    attempt: None,
+                    total_attempts: None,
+                });
+                store_and_emit_outcome(
+                    &app,
+                    &root,
+                    capture_id,
+                    &language,
+                    "failed",
+                    failure_summary("evidence_save", &message, Some(&analysis)),
+                    Some(&analysis),
+                    None,
+                    Some("evidence_save"),
+                    Some(message.clone()),
+                )?;
+                return Err(AppError::Message(message));
+            }
+        };
     let mut response = match tailor_and_render_with_progress(
         TailorRequest {
             language: language.clone(),
             parsed: captured.parsed,
             analysis: request.analysis,
-            approved_evidence: selected_for_prompt(&request.selected_evidence),
+            approved_evidence,
             priority_attested_terms: vec![],
             bullet_keyword_emphasis: request.bullet_keyword_emphasis,
         },
@@ -630,8 +652,11 @@ pub async fn retailor_resume_with_evidence(
                 .to_string(),
         ));
     }
-    let source_score = stored.resume["report"]["estimated_ats_coverage_score"]
+    // Prefer the measured score. Results stored before scoring existed only carry the model's
+    // estimate, and refusing to re-tailor those would strand the user's existing history.
+    let source_score = stored.resume["report"]["ats_coverage"]["score"]
         .as_u64()
+        .or_else(|| stored.resume["report"]["estimated_ats_coverage_score"].as_u64())
         .and_then(|score| u8::try_from(score).ok())
         .ok_or_else(|| AppError::Message("The source result has no ATS score.".to_string()))?;
     let omitted_terms = stored.resume["report"]["omitted_unsupported_keywords"]
@@ -660,30 +685,8 @@ pub async fn retailor_resume_with_evidence(
     let base_resume = load_base_resume(&root, &request.language)
         .map_err(|error| AppError::Message(error.to_string()))?;
     let preflight = preflight_items(&analysis, &base_resume, &bank);
-    let mut approved_evidence = preflight
-        .iter()
-        .filter(|item| item.source == "evidence_bank")
-        .filter_map(|item| item.matched_term.as_deref())
-        .filter_map(|matched| {
-            bank.entries
-                .iter()
-                .find(|entry| equivalent_terms(&entry.term, matched))
-                .cloned()
-        })
-        .collect::<Vec<EvidenceEntry>>();
-    for selected in &selected_terms {
-        if let Some(entry) = bank.entries.iter().find(|entry| {
-            equivalent_terms(&entry.term, selected)
-                || placement_equivalent_terms(&entry.term, selected)
-        }) {
-            if !approved_evidence
-                .iter()
-                .any(|existing| equivalent_terms(&existing.term, &entry.term))
-            {
-                approved_evidence.push(entry.clone());
-            }
-        }
-    }
+    let mut approved_evidence = approved_evidence_for(&preflight, &bank, &selected_evidence);
+    append_banked_terms(&mut approved_evidence, &bank, &selected_terms);
     let bullet_keyword_emphasis: BulletKeywordEmphasis =
         serde_json::from_value(stored.resume["bullet_keyword_emphasis"].clone())
             .unwrap_or_default();
@@ -1018,7 +1021,13 @@ fn recover_pipeline_result(
                 .sum::<usize>()
         })
         .unwrap_or(0);
-    let emphasis = if total_bullets > 0 && experience_bullets_changed == total_bullets {
+    let replaced_any_bullet = report
+        .bullet_rewrite_decisions
+        .iter()
+        .any(|decision| decision.outcome == BulletRewriteOutcome::Replaced);
+    let emphasis = if replaced_any_bullet {
+        "max"
+    } else if total_bullets > 0 && experience_bullets_changed == total_bullets {
         "high"
     } else {
         "balanced"
@@ -1034,8 +1043,12 @@ fn recover_pipeline_result(
     let pdf_ready = current_artifact(&pdf_path);
     let docx_ready = current_artifact(&docx_path);
     let summary = format!(
-        "Tailoring completed with {} estimated ATS coverage. {} supported keywords were covered; {} unsupported keywords were omitted.",
-        report.estimated_ats_coverage_score,
+        "Tailoring completed with {} measured ATS coverage. {} job keywords were covered; {} were not.",
+        report
+            .ats_coverage
+            .as_ref()
+            .map(|coverage| coverage.score)
+            .unwrap_or(report.model_estimated_ats_coverage_score),
         report.covered_keywords.len(),
         report.omitted_unsupported_keywords.len()
     );
@@ -1399,7 +1412,8 @@ mod tests {
                 omitted_unsupported_keywords: vec!["Kubernetes".to_string()],
                 changed_fields: vec!["experience.bullets".to_string()],
                 safety_notes: vec![],
-                estimated_ats_coverage_score: 81,
+                model_estimated_ats_coverage_score: 81,
+                ats_coverage: None,
                 bullet_rewrite_decisions: vec![],
             })
             .unwrap(),

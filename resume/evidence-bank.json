@@ -2005,6 +2005,162 @@
       "kind": "technology",
       "user_attested": true,
       "allow_model_role_placement": false
+    },
+    {
+      "term": "Angular / Vue.Js / React",
+      "kind": "technology",
+      "user_attested": true,
+      "allow_model_role_placement": false
+    },
+    {
+      "term": "Développer, Déployer et participer au Run",
+      "kind": "responsibility",
+      "user_attested": true,
+      "allow_model_role_placement": false
+    },
+    {
+      "term": "Maîtrise de la programmation réactive",
+      "kind": "technology",
+      "user_attested": true,
+      "allow_model_role_placement": false
+    },
+    {
+      "term": "Maîtrise des API REST",
+      "kind": "technology",
+      "user_attested": true,
+      "allow_model_role_placement": false
+    },
+    {
+      "term": "Maîtrise d’un framework Front",
+      "kind": "technology",
+      "user_attested": true,
+      "allow_model_role_placement": false
+    },
+    {
+      "term": "Minimum 3 ans d’expérience en management",
+      "kind": "technology",
+      "user_attested": true,
+      "allow_model_role_placement": false
+    },
+    {
+      "term": "Sensibilisation aux problématiques de performance applicative",
+      "kind": "technology",
+      "user_attested": true,
+      "allow_model_role_placement": false
+    },
+    {
+      "term": "architecture applicative et technique",
+      "kind": "responsibility",
+      "user_attested": true,
+      "allow_model_role_placement": false
+    },
+    {
+      "term": "performance applicative",
+      "kind": "method_domain",
+      "user_attested": true,
+      "allow_model_role_placement": false
+    },
+    {
+      "term": "software craftsmanship",
+      "kind": "method_domain",
+      "user_attested": true,
+      "allow_model_role_placement": false
+    },
+    {
+      "term": "Architecture Front-End moderne",
+      "kind": "technology",
+      "user_attested": true,
+      "allow_model_role_placement": false
+    },
+    {
+      "term": "Bon niveau d’anglais supérieur à B2",
+      "kind": "technology",
+      "user_attested": true,
+      "allow_model_role_placement": false
+    },
+    {
+      "term": "Debugging avancé",
+      "kind": "technology",
+      "user_attested": true,
+      "allow_model_role_placement": false
+    },
+    {
+      "term": "Facilitation des arbitrages techniques",
+      "kind": "technology",
+      "user_attested": true,
+      "allow_model_role_placement": false
+    },
+    {
+      "term": "IA assistée au code",
+      "kind": "technology",
+      "user_attested": true,
+      "allow_model_role_placement": false
+    },
+    {
+      "term": "Niveau expert en TypeScript et React",
+      "kind": "technology",
+      "user_attested": true,
+      "allow_model_role_placement": false
+    },
+    {
+      "term": "Rédaction de documents clairs et structurés",
+      "kind": "technology",
+      "user_attested": true,
+      "allow_model_role_placement": false
+    },
+    {
+      "term": "Référent·e technique",
+      "kind": "responsibility",
+      "user_attested": true,
+      "allow_model_role_placement": false
+    },
+    {
+      "term": "State management avancé",
+      "kind": "method_domain",
+      "user_attested": true,
+      "allow_model_role_placement": false
+    },
+    {
+      "term": "Vulgarisation de concepts complexes",
+      "kind": "technology",
+      "user_attested": true,
+      "allow_model_role_placement": false
+    },
+    {
+      "term": "Évaluation et onboarding d’ingénieurs Front",
+      "kind": "technology",
+      "user_attested": true,
+      "allow_model_role_placement": false
+    },
+    {
+      "term": "ADR",
+      "kind": "technology",
+      "user_attested": true,
+      "allow_model_role_placement": false
+    },
+    {
+      "term": "Outils d’IA",
+      "kind": "technology",
+      "user_attested": true,
+      "allow_model_role_placement": false
+    },
+    {
+      "term": "Radix",
+      "kind": "technology",
+      "user_attested": true,
+      "allow_model_role_placement": false
+    },
+    {
+      "term": "Tests e2e",
+      "kind": "technology",
+      "user_attested": true,
+      "allow_model_role_placement": false
+    },
+    {
+      "term": "shadCN",
+      "kind": "technology",
+      "user_attested": true,
+      "allow_model_role_placement": false
     }
   ]
 }

@@ -18,12 +18,22 @@ Build a local resume-tailoring workflow that captures job posts, analyzes ATS-re
 - DOCX layout is locked. Header/contact details, section headings, and education/formation must not change during tailoring.
 - The AI tailoring layer may rewrite only experience bullets and skills strings unless the user explicitly expands scope.
 - Never add unsupported credentials, tools, employers, metrics, responsibilities, certifications, or education. Unsupported high-value ATS terms belong in a report, not in the resume.
+- The ATS score is measured, never reported by a model. `src-tauri/src/ats_score.rs` computes it from the generated document; the model's `estimated_ats_coverage_score` is advisory only and must not be used to drive logic or shown as the headline number.
+- The evidence preflight and the ATS scorer must build their term ledger from the same `evidence::analysis_candidates`. If they diverge, the app asks the user to confirm one set of terms while scoring another.
+- One deliberate exception: `max` bullet keyword emphasis may state a responsibility directly implied by a role's stated stack, title, and scope, and only inside a bullet it replaces outright. This is intentional - see `BulletKeywordEmphasis::Max` and the `invention_rule` branch in `src-tauri/src/tailoring.rs`. Credentials, tools, employers, metrics, certifications, and education stay invention-forbidden at every level, including `max`.
 
 ## AI Model Defaults
 
 - Job analysis uses `OPENAI_MODEL`, defaulting to `gpt-5.6-luna` for cost-sensitive extraction and classification.
 - Resume tailoring uses `OPENAI_TAILOR_MODEL`, defaulting to `gpt-5.6-terra` for higher-quality constrained rewriting. It does not inherit `OPENAI_MODEL`; set both env vars explicitly when overriding.
 - Keep model choices explicit; do not casually swap models without updating the rationale.
+
+## AI Layer Notes
+
+- Both OpenAI calls go through `crate::http::shared_client()`, which carries a timeout. Do not construct a bare `reqwest::Client` for a provider call.
+- `server::prompt_job_view` is the only view of a capture that should reach a prompt. It drops `description_html`, `raw`, and other fields that duplicate content or carry no ATS signal.
+- In `build_tailoring_prompt`, the large static payloads sit contiguously and the volatile retry-feedback blocks trail them. Do not move `concise_instruction` or `correction_instruction` back above the payloads: that breaks the cacheable prefix across the four retry attempts.
+- Preflight heuristics (`is_generic_trait`, `is_job_title`, `is_specific_responsibility`, `inferred_kind`, the `token_set` stop list) are bilingual. An FR resume path ships, so English-only literals silently let French boilerplate through.
 
 ## Verification
 
