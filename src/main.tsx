@@ -281,7 +281,22 @@ const eyebrowClass =
   'mb-2 text-[11px] font-bold uppercase tracking-[0.12em] text-[#668074]';
 const mutedClass = 'm-0 text-[#627067]';
 const primaryButtonClass =
-  'cursor-pointer rounded-lg border-0 bg-[#176a46] px-4 py-3 font-bold text-white disabled:cursor-wait disabled:opacity-65 self-center';
+  'cursor-pointer rounded-lg border-0 bg-[#176a46] px-4 py-3 font-bold text-white disabled:cursor-wait disabled:opacity-65';
+const fieldGroupClass = 'grid w-[232px] gap-1.5 max-[680px]:w-full';
+const fieldLabelClass = 'text-[11px] font-bold text-[#526259]';
+const segmentedGroupClass =
+  'grid grid-cols-2 overflow-hidden rounded-lg border border-[#cbd4cc] bg-white';
+const segmentedButtonClass = (active: boolean, first: boolean) =>
+  [
+    'cursor-pointer border-0 px-3 py-[11px] text-[13px] font-bold tracking-[0.02em] transition-colors',
+    'focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-[#176a46]',
+    first ? '' : 'border-l border-[#cbd4cc]',
+    active
+      ? 'bg-[#e7f1ea] text-[#12673d] shadow-[inset_0_0_0_1px_#a9ddba]'
+      : 'bg-white text-[#19221d] hover:bg-[#f3f6f3]',
+    'disabled:cursor-wait disabled:opacity-65',
+  ].join(' ');
+const fieldHintClass = 'min-h-[42px] text-[11px] leading-tight text-[#627067]';
 const secondaryButtonClass =
   'cursor-pointer rounded-lg border border-[#cbd4cc] bg-white px-[13px] py-[11px] font-bold text-[#19221d]';
 const statusBadgeClass =
@@ -791,7 +806,8 @@ function AnalysisDetail({ analysis }: { analysis: Analysis | null }) {
       </summary>
       <div className='mt-3 rounded-[10px] border border-[#e7ebe7] bg-white p-4'>
         <p className='m-0 text-[13px] text-[#627067]'>
-          Target role: <strong className='text-[#3d4a41]'>{analysis.role_target}</strong>
+          Target role:{' '}
+          <strong className='text-[#3d4a41]'>{analysis.role_target}</strong>
           {analysis.seniority ? ` - ${analysis.seniority}` : ''}
         </p>
         {core.length > 0 && (
@@ -814,9 +830,15 @@ function AnalysisDetail({ analysis }: { analysis: Analysis | null }) {
         )}
         <TermList label='Required' terms={analysis.required_skills} />
         <TermList label='Preferred' terms={analysis.preferred_skills} />
-        <TermList label='Tools and platforms' terms={analysis.tools_and_platforms} />
+        <TermList
+          label='Tools and platforms'
+          terms={analysis.tools_and_platforms}
+        />
         <TermList label='Domain' terms={analysis.domain_terms} />
-        <TermList label='Responsibilities' terms={analysis.responsibility_phrases} />
+        <TermList
+          label='Responsibilities'
+          terms={analysis.responsibility_phrases}
+        />
         <TermList
           label='Do not claim without evidence'
           terms={analysis.must_not_claim_without_evidence}
@@ -838,7 +860,9 @@ function CoverageBreakdown({ coverage }: { coverage: AtsCoverage }) {
         const percent =
           category.total_weight === 0
             ? 0
-            : Math.round((category.covered_weight / category.total_weight) * 100);
+            : Math.round(
+                (category.covered_weight / category.total_weight) * 100,
+              );
         return (
           <div key={category.group} className='text-[11px] text-[#627067]'>
             <div className='flex items-baseline justify-between gap-2'>
@@ -953,7 +977,11 @@ export function ResultPanel({
     .map((decision) => {
       const path = `/experience/${decision.experience_index}/bullets/${decision.bullet_index}`;
       const change = contentChanges.find((entry) => entry.path === path);
-      return { ...decision, before: change?.before ?? '', after: change?.after ?? '' };
+      return {
+        ...decision,
+        before: change?.before ?? '',
+        after: change?.after ?? '',
+      };
     })
     .filter((entry) => entry.after !== '');
   const hasPdf = resume.artifact
@@ -1470,7 +1498,10 @@ export function App() {
     // so ignore a payload that says nothing new.
     const signature = outcomeSignature(normalized);
     if (signature === outcomeSignatureRef.current) {
-      console.info('[ui-result] skipped duplicate result', { source, captureId });
+      console.info('[ui-result] skipped duplicate result', {
+        source,
+        captureId,
+      });
       return true;
     }
     console.info('[ui-result] accepted result', {
@@ -1592,7 +1623,9 @@ export function App() {
           // A run may have started while this was in flight; applyPreflight would reset
           // the evidence the user just confirmed.
           if (runId !== runIdRef.current) {
-            console.info('[ui-result] discarded late preflight rebuild', { reason });
+            console.info('[ui-result] discarded late preflight rebuild', {
+              reason,
+            });
             return accepted;
           }
           applyPreflight(rebuilt);
@@ -1657,9 +1690,7 @@ export function App() {
       // `/captures` and the legacy `/analyze` route both emit this event, so a stale
       // extension service worker can deliver the same capture twice. Re-running the reset
       // would tear the view down a second time for no new data.
-      if (
-        event.payload.received_at_ms === captureRef.current?.received_at_ms
-      ) {
+      if (event.payload.received_at_ms === captureRef.current?.received_at_ms) {
         console.info('[ui-result] ignoring duplicate capture event', {
           captureId: event.payload.received_at_ms,
         });
@@ -2218,75 +2249,67 @@ export function App() {
                   : 'Analyze ATS signals before deciding what belongs in this application.'}
               </p>
             </div>
-            <div className='flex flex-wrap items-start gap-2.5 max-[680px]:w-full'>
+            <div className='flex flex-wrap items-end gap-3 max-[680px]:w-full'>
               {/* Available before analysis so a wrong auto-detect can be corrected
                   without spending an OpenAI call first. */}
               {job && (
-                <div className='grid gap-1 pt-2'>
-                  <span className='text-[11px] font-bold text-[#526259]'>
+                <div className={fieldGroupClass}>
+                  <span className={fieldLabelClass}>
                     Resume output language
                   </span>
                   <div
-                    className='flex overflow-hidden rounded-lg border border-[#cbd4cc] self-center'
+                    className={segmentedGroupClass}
                     role='group'
                     aria-label='Resume output language'
                   >
-                    <button
-                      className={`cursor-pointer border-0 px-[13px] py-[11px] font-bold ${
-                        language === 'en'
-                          ? 'bg-[#e7f1ea] text-[#12673d]'
-                          : 'bg-white text-[#19221d]'
-                      } disabled:cursor-wait disabled:opacity-65`}
-                      disabled={running || languageChanging}
-                      onClick={() => void changeLanguage('en')}
-                    >
-                      EN
-                    </button>
-                    <button
-                      className={`cursor-pointer border-0 border-l border-[#cbd4cc] px-[13px] py-[11px] font-bold ${
-                        language === 'fr'
-                          ? 'bg-[#e7f1ea] text-[#12673d]'
-                          : 'bg-white text-[#19221d]'
-                      } disabled:cursor-wait disabled:opacity-65`}
-                      disabled={running || languageChanging}
-                      onClick={() => void changeLanguage('fr')}
-                    >
-                      FR
-                    </button>
+                    {(['en', 'fr'] as const).map((option, index) => (
+                      <button
+                        aria-pressed={language === option}
+                        className={segmentedButtonClass(
+                          language === option,
+                          index === 0,
+                        )}
+                        disabled={running || languageChanging}
+                        key={option}
+                        onClick={() => void changeLanguage(option)}
+                        type='button'
+                      >
+                        {option.toUpperCase()}
+                      </button>
+                    ))}
                   </div>
-                  <small className='max-w-[245px] text-[11px] leading-tight text-[#627067]'>
+                  <small className={fieldHintClass}>
                     Used for evidence matching and the tailored resume output.
                   </small>
                 </div>
               )}
               {preflight && (
-                <div className='grid gap-1 pt-2'>
-                  <span className='text-[11px] font-bold text-[#526259]'>
+                <div className={fieldGroupClass}>
+                  <span className={fieldLabelClass}>
                     Experience keyword emphasis
                   </span>
                   <div
-                    className='flex overflow-hidden rounded-lg border border-[#cbd4cc] justify-evenly'
+                    className={segmentedGroupClass}
                     role='group'
                     aria-label='Experience keyword emphasis'
                   >
-                    {(['high', 'max'] as const).map((level) => (
+                    {(['high', 'max'] as const).map((level, index) => (
                       <button
-                        className={`cursor-pointer border-0 px-[13px] py-[11px] font-bold capitalize ${
-                          level === 'high' ? '' : 'border-l border-[#cbd4cc]'
-                        } ${
-                          bulletKeywordEmphasis === level
-                            ? 'bg-[#e7f1ea] text-[#12673d]'
-                            : 'bg-white text-[#19221d]'
-                        } disabled:cursor-wait disabled:opacity-65`}
+                        aria-pressed={bulletKeywordEmphasis === level}
+                        className={`${segmentedButtonClass(
+                          bulletKeywordEmphasis === level,
+                          index === 0,
+                        )} capitalize`}
                         disabled={running || languageChanging}
                         key={level}
                         onClick={() => setBulletKeywordEmphasis(level)}
+                        type='button'
                       >
                         {level}
                       </button>
                     ))}
                   </div>
-                  <small className='max-w-[245px] text-[11px] leading-tight text-[#627067]'>
+                  <small className={fieldHintClass}>
                     High rewrites every bullet with supported job language. Max
                     also swaps 1-3 low-relevance bullets for new ones aimed at
                     this job.
@@ -2294,7 +2317,7 @@ export function App() {
                 </div>
               )}
               <button
-                className={primaryButtonClass}
+                className={`${primaryButtonClass} max-[680px]:w-full self-center`}
                 disabled={running || languageChanging}
                 onClick={preflight ? generate : analyze}
               >
