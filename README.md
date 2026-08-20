@@ -149,6 +149,16 @@ must stay out of the resume.
    actions. Successful variants include `variant.json`, `tailoring-report.json`,
    the rendered DOCX, and usually a one-page PDF.
 
+   The summary is headed by the job it belongs to - the captured title, the company,
+   the output language, the emphasis level that produced it, and a link back to the
+   original post. None of that is stored in the result; it comes from the capture on
+   screen, which every recovery path already pins to the same `capture_received_at_ms`.
+
+   Stepping back to the captured job keeps the finished result in memory. The review
+   screen then offers **Back to tailored result** to reopen the completed summary
+   without spending another tailoring run, and its primary action reads **Re-run
+   tailoring** to make clear that it would overwrite the existing result.
+
    A verified employer-facing artifact is atomically published to the stable
    `Downloads/Xevier_T_CV_<lang>.pdf` filename. If PDF output is not available
    but a DOCX passed validation, the validated DOCX is published instead. Only one

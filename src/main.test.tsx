@@ -15,6 +15,12 @@ import {
 afterEach(cleanup);
 
 const analysis = { summary: 'Prioritize reliable backend delivery.' };
+const capturedJob = {
+  domain: 'indeed',
+  title: 'Backend Engineer',
+  company: 'Example Co',
+  url: 'https://jobs.example.com/backend-engineer',
+};
 
 function completedResume(status: 'completed' | 'partial' | 'failed' = 'completed') {
   return {
@@ -68,6 +74,53 @@ describe('always-visible run summary', () => {
 
     expect(screen.getByText('Analysis and tailored resume ready')).toBeVisible();
     expect(screen.getByTestId('run-summary-score')).toHaveTextContent('84');
+  });
+
+  // A summary that does not name the posting is unreadable once more than one job has been
+  // tailored: nothing in the stored outcome identifies the job, so the capture supplies it.
+  it('names the job post, language and emphasis the result belongs to', () => {
+    const outcome = localOutcome({
+      captureId: 2,
+      language: 'fr',
+      analysis,
+      resume: completedResume(),
+    });
+    render(<RunSummaryPanel outcome={outcome} job={capturedJob} />);
+
+    expect(screen.getByRole('heading', { name: 'Backend Engineer' })).toBeVisible();
+    expect(screen.getByTestId('run-summary-job')).toHaveTextContent(
+      'Example Co · French resume · balanced keyword emphasis',
+    );
+    expect(screen.getByRole('link', { name: 'View job post ->' })).toHaveAttribute(
+      'href',
+      capturedJob.url,
+    );
+    // The status heading keeps its place below the identity block.
+    expect(screen.getByText('Analysis and tailored resume ready')).toBeVisible();
+  });
+
+  it('drops the emphasis and the link when the run has neither', () => {
+    const outcome = localOutcome({ captureId: 2, language: 'en', analysis });
+    render(
+      <RunSummaryPanel
+        outcome={outcome}
+        job={{ title: 'Backend Engineer', company: 'Example Co' }}
+      />,
+    );
+
+    expect(screen.getByTestId('run-summary-job')).toHaveTextContent(
+      'Example Co · English resume',
+    );
+    expect(screen.getByTestId('run-summary-job')).not.toHaveTextContent('emphasis');
+    expect(screen.queryByRole('link', { name: 'View job post ->' })).not.toBeInTheDocument();
+  });
+
+  it('falls back to the status heading when no capture is supplied', () => {
+    const outcome = localOutcome({ captureId: 2, language: 'en', analysis });
+    render(<RunSummaryPanel outcome={outcome} />);
+
+    expect(screen.getByRole('heading', { name: 'ATS analysis ready' })).toBeVisible();
+    expect(screen.queryByTestId('run-summary-job')).not.toBeInTheDocument();
   });
 
   it('keeps genuine analysis when a downstream stage fails', () => {

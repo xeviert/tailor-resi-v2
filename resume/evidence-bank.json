@@ -1155,7 +1155,7 @@
     },
     {
       "term": "Architecture logicielle",
-      "kind": "method_domain",
+      "kind": "responsibility",
       "user_attested": true,
       "allow_model_role_placement": false
     },
@@ -1191,7 +1191,7 @@
     },
     {
       "term": "Tests automatisés",
-      "kind": "technology",
+      "kind": "method_domain",
       "user_attested": true,
       "allow_model_role_placement": false
     },
@@ -1305,7 +1305,7 @@
     },
     {
       "term": "Qualité du code",
-      "kind": "responsibility",
+      "kind": "method_domain",
       "user_attested": true,
       "allow_model_role_placement": false
     },
@@ -1383,7 +1383,7 @@
     },
     {
       "term": "GCP",
-      "kind": "method_domain",
+      "kind": "technology",
       "user_attested": true,
       "allow_model_role_placement": true
     },
@@ -1455,7 +1455,7 @@
     },
     {
       "term": "Azure",
-      "kind": "method_domain",
+      "kind": "technology",
       "user_attested": true,
       "allow_model_role_placement": true
     },
@@ -1624,7 +1624,7 @@
     },
     {
       "term": "Clean Code",
-      "kind": "technology",
+      "kind": "method_domain",
       "user_attested": true,
       "allow_model_role_placement": true
     },
@@ -1642,7 +1642,7 @@
     },
     {
       "term": "Pair programming",
-      "kind": "technology",
+      "kind": "responsibility",
       "user_attested": true,
       "allow_model_role_placement": false
     },
@@ -1696,7 +1696,7 @@
     },
     {
       "term": "Choix techniques",
-      "kind": "technology",
+      "kind": "responsibility",
       "user_attested": true,
       "allow_model_role_placement": false
     },
@@ -1834,7 +1834,7 @@
     },
     {
       "term": "Code reviews",
-      "kind": "technology",
+      "kind": "responsibility",
       "user_attested": true,
       "allow_model_role_placement": false
     },
@@ -2158,6 +2158,204 @@
     },
     {
       "term": "shadCN",
+      "kind": "technology",
+      "user_attested": true,
+      "allow_model_role_placement": false
+    },
+    {
+      "term": "Adaptation à la stack technique des clients",
+      "kind": "technology",
+      "user_attested": true,
+      "allow_model_role_placement": false
+    },
+    {
+      "term": "Agentic Platform",
+      "kind": "method_domain",
+      "user_attested": true,
+      "allow_model_role_placement": false
+    },
+    {
+      "term": "Au moins une spécialisation technique",
+      "kind": "technology",
+      "user_attested": true,
+      "allow_model_role_placement": false
+    },
+    {
+      "term": "Fondamentaux classiques du développement logiciel",
+      "kind": "technology",
+      "user_attested": true,
+      "allow_model_role_placement": false
+    },
+    {
+      "term": "Qualité des livrables",
+      "kind": "technology",
+      "user_attested": true,
+      "allow_model_role_placement": false
+    },
+    {
+      "term": "4 à 8 ans d’expérience en développement",
+      "kind": "technology",
+      "user_attested": true,
+      "allow_model_role_placement": false
+    },
+    {
+      "term": "Accompagnement de développeurs",
+      "kind": "technology",
+      "user_attested": true,
+      "allow_model_role_placement": false
+    },
+    {
+      "term": "Architectures scalables",
+      "kind": "method_domain",
+      "user_attested": true,
+      "allow_model_role_placement": false
+    },
+    {
+      "term": "Architectures web",
+      "kind": "technology",
+      "user_attested": true,
+      "allow_model_role_placement": false
+    },
+    {
+      "term": "BDD",
+      "kind": "technology",
+      "user_attested": true,
+      "allow_model_role_placement": false
+    },
+    {
+      "term": "Back",
+      "kind": "technology",
+      "user_attested": true,
+      "allow_model_role_placement": false
+    },
+    {
+      "term": "Choix techniques pertinents",
+      "kind": "technology",
+      "user_attested": true,
+      "allow_model_role_placement": false
+    },
+    {
+      "term": "Coaching de développeurs",
+      "kind": "responsibility",
+      "user_attested": true,
+      "allow_model_role_placement": false
+    },
+    {
+      "term": "Code pratique régulier",
+      "kind": "technology",
+      "user_attested": true,
+      "allow_model_role_placement": false
+    },
+    {
+      "term": "Delivery de projet",
+      "kind": "responsibility",
+      "user_attested": true,
+      "allow_model_role_placement": false
+    },
+    {
+      "term": "Accompagnement des ingénieurs",
+      "kind": "responsibility",
+      "user_attested": true,
+      "allow_model_role_placement": false
+    },
+    {
+      "term": "Accompagnement des équipes d'ingénieurs",
+      "kind": "technology",
+      "user_attested": true,
+      "allow_model_role_placement": false
+    },
+    {
+      "term": "Avancement de projets",
+      "kind": "responsibility",
+      "user_attested": true,
+      "allow_model_role_placement": false
+    },
+    {
+      "term": "Background technique solide",
+      "kind": "technology",
+      "user_attested": true,
+      "allow_model_role_placement": false
+    },
+    {
+      "term": "Décisions techniques",
+      "kind": "responsibility",
+      "user_attested": true,
+      "allow_model_role_placement": false
+    },
+    {
+      "term": "Environ 3 ans d'expérience dans le management d'équipes",
+      "kind": "technology",
+      "user_attested": true,
+      "allow_model_role_placement": false
+    },
+    {
+      "term": "Gestion de projets",
+      "kind": "technology",
+      "user_attested": true,
+      "allow_model_role_placement": false
+    },
+    {
+      "term": "Management de plusieurs équipes",
+      "kind": "responsibility",
+      "user_attested": true,
+      "allow_model_role_placement": false
+    },
+    {
+      "term": "Prise de décisions techniques",
+      "kind": "technology",
+      "user_attested": true,
+      "allow_model_role_placement": false
+    },
+    {
+      "term": "Qualité et respect des délais",
+      "kind": "responsibility",
+      "user_attested": true,
+      "allow_model_role_placement": false
+    },
+    {
+      "term": "Respect des délais",
+      "kind": "technology",
+      "user_attested": true,
+      "allow_model_role_placement": false
+    },
+    {
+      "term": "Rituels agiles Scrum",
+      "kind": "responsibility",
+      "user_attested": true,
+      "allow_model_role_placement": false
+    },
+    {
+      "term": "Suivi de la qualité",
+      "kind": "technology",
+      "user_attested": true,
+      "allow_model_role_placement": false
+    },
+    {
+      "term": "Suivi du développement",
+      "kind": "responsibility",
+      "user_attested": true,
+      "allow_model_role_placement": false
+    },
+    {
+      "term": "AWS Lambda",
+      "kind": "technology",
+      "user_attested": true,
+      "allow_model_role_placement": false
+    },
+    {
+      "term": "MCP",
+      "kind": "technology",
+      "user_attested": true,
+      "allow_model_role_placement": false
+    },
+    {
+      "term": "NoSQL",
+      "kind": "technology",
+      "user_attested": true,
+      "allow_model_role_placement": false
+    },
+    {
+      "term": "Serverless",
       "kind": "technology",
       "user_attested": true,
       "allow_model_role_placement": false

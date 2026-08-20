@@ -11,7 +11,7 @@ import {
   useState,
 } from 'react';
 import { createRoot } from 'react-dom/client';
-import { JobPanel } from './job-panel';
+import { JobPanel, safeUrl } from './job-panel';
 import './styles.css';
 
 type Language = 'en' | 'fr';
@@ -692,12 +692,22 @@ function TailoringChanges({
 
 export function RunSummaryPanel({
   outcome,
+  job,
 }: {
   outcome: StoredPipelineResult;
+  /**
+   * The capture this run belongs to. Optional because the panel is rendered from a stored
+   * outcome, which carries no job identity of its own; every recovery path already refuses a
+   * snapshot from a different capture, so when it is supplied it always describes this result.
+   */
+  job?: Record<string, unknown>;
 }) {
   const status = outcome.status ?? 'failed';
   const report = outcome.resume?.report ?? null;
   const failed = status === 'failed';
+  const jobTitle = jobText(job?.title, '');
+  const postUrl = safeUrl(job?.url);
+  const emphasis = outcome.resume?.bullet_keyword_emphasis;
   const heading =
     status === 'analysis_ready'
       ? 'ATS analysis ready'
@@ -721,7 +731,41 @@ export function RunSummaryPanel({
     >
       <div>
         <p className={eyebrowClass}>ATS ANALYSIS SUMMARY</p>
-        <h2 className='mt-0 mb-2 text-[22px] font-bold'>{heading}</h2>
+        {/* The job title heads the panel when we know it: a summary that does not name the
+            posting is unreadable once more than one job has been tailored. Without a capture
+            the status line keeps its old place as the heading. */}
+        <h2 className='mt-0 mb-2 text-[22px] font-bold'>{jobTitle || heading}</h2>
+        {jobTitle && (
+          <>
+            <p
+              className={`${mutedClass} mb-2 text-[13px]`}
+              data-testid='run-summary-job'
+            >
+              {jobText(job?.company, 'Company not provided')} ·{' '}
+              {outcome.language === 'en' ? 'English' : 'French'} resume
+              {emphasis && (
+                <>
+                  {' · '}
+                  <span className='capitalize'>{emphasis}</span> keyword emphasis
+                </>
+              )}
+              {postUrl && (
+                <>
+                  {' · '}
+                  <a
+                    className='font-bold text-[#176a46] no-underline'
+                    href={postUrl}
+                    target='_blank'
+                    rel='noreferrer'
+                  >
+                    View job post -&gt;
+                  </a>
+                </>
+              )}
+            </p>
+            <p className='mt-0 mb-2 font-bold'>{heading}</p>
+          </>
+        )}
         <p className='m-0' data-testid='run-summary-text'>
           {outcome.summary}
         </p>
@@ -1423,6 +1467,9 @@ export function App() {
   const [running, setRunning] = useState(false);
   const [error, setError] = useState('');
   const [result, setResult] = useState<PipelineResult | null>(null);
+  // Set while the user has stepped back to the captured job from a finished result. The
+  // result itself is kept, so the completion screen can be reopened without re-tailoring.
+  const [reviewingJob, setReviewingJob] = useState(false);
   const [outcome, setOutcome] = useState<StoredPipelineResult | null>(null);
   const [progressEvents, setProgressEvents] = useState<PipelineProgress[]>([]);
   const [preflight, setPreflight] = useState<PreflightResult | null>(null);
@@ -1530,6 +1577,9 @@ export function App() {
     return true;
   }
   function beginRun() {
+    // Every run - analysis, tailoring, re-tailoring, a language switch, a fresh capture -
+    // goes through here, so this is the one place the back-to-job detour has to be dropped.
+    setReviewingJob(false);
     outcomeSignatureRef.current = null;
     runIdRef.current += 1;
     return runIdRef.current;
@@ -1650,10 +1700,10 @@ export function App() {
   const screen: Screen = useMemo(() => {
     if (!job) return 'empty';
     if (workflowPhase === 'tailoring' && running) return 'pipeline';
-    if (result) return 'completion';
+    if (result && !reviewingJob) return 'completion';
     if (workflowPhase === 'tailoring') return 'pipeline';
     return 'review';
-  }, [job, workflowPhase, running, result]);
+  }, [job, workflowPhase, running, result, reviewingJob]);
   useEffect(() => {
     void fetch(BRIDGE_HEALTH_URL)
       .then(async (response) => {
@@ -2156,7 +2206,7 @@ export function App() {
           tabIndex={-1}
           className='scroll-mt-4 outline-none'
         >
-          <RunSummaryPanel outcome={outcome} />
+          <RunSummaryPanel outcome={outcome} job={job} />
         </div>
       )}
       {screen === 'completion' && result ? (
@@ -2179,7 +2229,7 @@ export function App() {
             <button
               className={secondaryButtonClass}
               onClick={() => {
-                setResult(null);
+                setReviewingJob(true);
                 setWorkflowPhase('job');
               }}
             >
@@ -2325,10 +2375,25 @@ export function App() {
                   ? 'Preparing language...'
                   : running
                     ? 'Working...'
-                    : preflight
-                      ? 'Generate tailored PDF'
-                      : 'Analyze job'}
+                    : !preflight
+                      ? 'Analyze job'
+                      : result
+                        ? // A result already exists; this click overwrites it. Not "re-tailor",
+                          // which the result panel uses for the evidence-driven loop.
+                          'Re-run tailoring'
+                        : 'Generate tailored PDF'}
               </button>
+              {result && (
+                <button
+                  className={`${secondaryButtonClass} max-[680px]:w-full self-center`}
+                  data-testid='back-to-result'
+                  disabled={running || languageChanging}
+                  onClick={() => setReviewingJob(false)}
+                  type='button'
+                >
+                  Back to tailored result
+                </button>
+              )}
             </div>
           </section>
           {preflight &&
@@ -2360,47 +2425,44 @@ export function App() {
           )}
         </>
       )}
-      {workflowPhase === 'job' &&
-        !result &&
-        bank &&
-        bank.entries.length > 0 && (
-          <details className={compactPanelClass}>
-            <summary className='cursor-pointer list-none [&::-webkit-details-marker]:hidden'>
-              <span className='flex items-center justify-between gap-4'>
-                <span>
-                  <span className={`${eyebrowClass} block`}>
-                    SAVED EVIDENCE
-                  </span>
-                  <strong className='text-[22px]'>
-                    Your local capability bank
-                  </strong>
-                  <small className='mt-1 block text-xs font-normal text-[#627067]'>
-                    {bank.entries.length} saved capabilities · collapsed by
-                    default
-                  </small>
+      {screen === 'review' && bank && bank.entries.length > 0 && (
+        <details className={compactPanelClass}>
+          <summary className='cursor-pointer list-none [&::-webkit-details-marker]:hidden'>
+            <span className='flex items-center justify-between gap-4'>
+              <span>
+                <span className={`${eyebrowClass} block`}>
+                  SAVED EVIDENCE
                 </span>
-                <span className='text-sm font-bold text-[#176a46]'>Show</span>
+                <strong className='text-[22px]'>
+                  Your local capability bank
+                </strong>
+                <small className='mt-1 block text-xs font-normal text-[#627067]'>
+                  {bank.entries.length} saved capabilities · collapsed by
+                  default
+                </small>
               </span>
-            </summary>
-            <div className='mt-5 flex flex-wrap gap-2 border-t border-[#e7ebe7] pt-5'>
-              {bank.entries.map((entry) => (
-                <span
-                  className='inline-flex items-center gap-[7px] rounded-full border border-[#d7e4d9] bg-[#eef4ef] py-[5px] pr-[7px] pl-2.5 text-[13px]'
-                  key={entry.term}
+              <span className='text-sm font-bold text-[#176a46]'>Show</span>
+            </span>
+          </summary>
+          <div className='mt-5 flex flex-wrap gap-2 border-t border-[#e7ebe7] pt-5'>
+            {bank.entries.map((entry) => (
+              <span
+                className='inline-flex items-center gap-[7px] rounded-full border border-[#d7e4d9] bg-[#eef4ef] py-[5px] pr-[7px] pl-2.5 text-[13px]'
+                key={entry.term}
+              >
+                {entry.term}
+                <button
+                  className='cursor-pointer border-0 bg-transparent px-0.5 py-0 text-lg leading-none text-[#385347]'
+                  aria-label={`Remove ${entry.term}`}
+                  onClick={() => remove(entry.term)}
                 >
-                  {entry.term}
-                  <button
-                    className='cursor-pointer border-0 bg-transparent px-0.5 py-0 text-lg leading-none text-[#385347]'
-                    aria-label={`Remove ${entry.term}`}
-                    onClick={() => remove(entry.term)}
-                  >
-                    x
-                  </button>
-                </span>
-              ))}
-            </div>
-          </details>
-        )}
+                  x
+                </button>
+              </span>
+            ))}
+          </div>
+        </details>
+      )}
     </main>
   );
 }

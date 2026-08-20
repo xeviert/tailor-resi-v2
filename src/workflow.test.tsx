@@ -392,9 +392,62 @@ describe('review-to-tailoring workflow', () => {
     fireEvent.click(
       screen.getByRole('button', { name: 'Back to captured job' }),
     );
+    // A result already exists, so the primary action is relabelled to say it overwrites it.
     expect(
-      await screen.findByRole('button', { name: 'Generate tailored PDF' }),
+      await screen.findByRole('button', { name: 'Re-run tailoring' }),
     ).toBeVisible();
+  });
+
+  // Stepping back to the job post used to null `result`, which was the only copy of the
+  // completion screen in memory: the summary could then only be reached by tailoring again.
+  it('reopens the finished result after stepping back to the captured job', async () => {
+    const sourceResume = completedResume();
+    mocks.invoke.mockImplementation((command: string) => {
+      switch (command) {
+        case 'get_latest_job':
+          return Promise.resolve(captured);
+        case 'get_latest_pipeline_result_any_language':
+          return Promise.resolve({
+            schema_version: 2,
+            capture_received_at_ms: 42,
+            language: 'en',
+            recovered_from_artifacts: false,
+            status: 'completed',
+            summary: analysis.summary,
+            failed_stage: null,
+            error: null,
+            analysis,
+            resume: sourceResume,
+          });
+        case 'get_evidence_bank':
+          return Promise.resolve({ version: 1, entries: [] });
+        default:
+          return Promise.resolve(null);
+      }
+    });
+
+    render(<App />);
+
+    expect(await screen.findByTestId('completion-result-panel')).toBeVisible();
+
+    fireEvent.click(
+      await screen.findByRole('button', { name: 'Back to captured job' }),
+    );
+    expect(await screen.findByRole('button', { name: 'Analyze job' })).toBeVisible();
+    expect(
+      screen.queryByTestId('completion-result-panel'),
+    ).not.toBeInTheDocument();
+
+    const before = mocks.invoke.mock.calls.length;
+    fireEvent.click(screen.getByTestId('back-to-result'));
+
+    expect(await screen.findByTestId('completion-result-panel')).toBeVisible();
+    // Nothing was regenerated: no tailoring command ran on the way back.
+    const commands = mocks.invoke.mock.calls
+      .slice(before)
+      .map(([command]) => command);
+    expect(commands).not.toContain('generate_tailored_resume');
+    expect(commands).not.toContain('retailor_resume_with_evidence');
   });
 });
 

@@ -18,7 +18,7 @@ function strings(value: unknown) {
   return Array.isArray(value) ? value.map(string).filter(Boolean) : [];
 }
 
-function safeUrl(value: unknown) {
+export function safeUrl(value: unknown) {
   const candidate = string(value);
   try {
     const url = new URL(candidate);
