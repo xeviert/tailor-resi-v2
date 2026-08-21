@@ -16,17 +16,45 @@ but the evidence preflight step is separate from raw analysis because it decides
 which analyzed terms are already supported, which need user attestation, and which
 must stay out of the resume.
 
-1. Capture a job post from the browser extension.
+1. Capture or import a job post.
 
-   The user opens a job post in the browser and clicks **Extract Job** in the
-   ResiTailor extension. The extension extracts the title, company, description,
-   URL, and related page metadata, then posts the payload to
+   The usual path is the browser extension: the user opens a job post and clicks
+   **Extract Job**. The extension extracts the title, company, description, URL,
+   and related page metadata, then posts the payload to
    `POST http://127.0.0.1:3000/captures`.
 
    The `/captures` route is storage-only. It normalizes the incoming job data,
    writes a timestamped capture under `data/job-captures/`, updates
    `data/job-captures/latest.json`, and emits the captured job to the desktop UI.
    It does not run AI analysis or tailoring.
+
+   The extension is best-effort and has no minimum-score gate, so a page it
+   cannot read properly still produces a capture - sometimes one whose whole
+   description is a single marketing sentence scraped out of an `og:description`
+   meta tag. For that case the desktop app can bring the posting in itself, from
+   the **Import a job post** panel on the empty screen or the **Capture looks
+   wrong?** panel under a capture that is already on screen. That panel opens on
+   its own when the capture carries parser warnings or a suspiciously short
+   description.
+
+   Importing takes either a URL or the pasted text of the posting:
+
+   - **From URL** fetches the page and looks for a schema.org `JobPosting` in a
+     `<script type="application/ld+json">` block. When a board publishes one it
+     is the whole posting, read exactly and for no tokens. Many boards do not -
+     several of the big ATS hosts render everything client-side and ship no
+     structured data - so when it is missing the stripped page text goes to the
+     AI layer for extraction instead.
+   - **Paste text** always uses the AI layer, because there is no markup left to
+     read structured data out of.
+
+   Expect the URL mode to fail on some boards. LinkedIn and anything behind
+   Cloudflare refuse requests that do not come from a real browser, and a page
+   that builds itself with JavaScript arrives as an empty shell. Both failures
+   say so and point at the paste mode; that is the documented workaround, not a
+   bug. Either way the import lands as an ordinary capture and the app stops at
+   step 2 for review - it never starts analysis on its own, so a bad extraction
+   cannot quietly spend an analysis call.
 
 2. Review the captured job in the desktop app.
 
@@ -239,6 +267,10 @@ run tailoring, render DOCX, validate layout, and return a combined response.
 
 The desktop UI uses the reviewed command path instead:
 
+- `import_job_from_url` and `import_job_from_text` for manual job import. Both
+  persist through the same `persist_capture` the extension route uses and emit
+  the same `job-data-received` event, so the desktop UI cannot tell an imported
+  job from a captured one.
 - `analyze_latest_job` for analysis plus evidence preflight.
 - `prepare_evidence_preflight` when switching EN/FR after analysis.
 - `generate_tailored_resume` for reviewed tailoring and artifact generation.
@@ -251,8 +283,10 @@ restart the desktop app instead of silently running an incompatible UI/backend
 pair.
 
 Successful OpenAI calls also write usage-only receipts under `data/api-usage/` so
-future token and cost investigations can be tied to the analysis or tailoring
-stage without persisting API keys or prompt contents.
+future token and cost investigations can be tied to the `job_import`,
+`job_analysis`, or tailoring stage without persisting API keys or prompt
+contents. A URL import that found JSON-LD writes no receipt at all, because it
+never called a model.
 
 ## Desktop UI and Linux
 

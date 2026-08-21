@@ -11,6 +11,7 @@ import {
   useState,
 } from 'react';
 import { createRoot } from 'react-dom/client';
+import { ImportJobPanel } from './job-import';
 import { JobPanel, safeUrl } from './job-panel';
 import './styles.css';
 
@@ -1694,6 +1695,17 @@ export function App() {
     }
   }
   const job = capture?.parsed;
+  // Open the re-import panel unprompted when the capture on screen looks like the failure this
+  // feature exists for. The extension has no minimum-score gate, so an `og:description` scrape
+  // reaches disk looking exactly like this: parser warnings, and a description that is one
+  // marketing sentence rather than a posting.
+  const captureLooksThin = useMemo(() => {
+    if (!job) return false;
+    const warnings = Array.isArray(job.warnings) ? job.warnings : [];
+    const description =
+      typeof job.description === 'string' ? job.description : '';
+    return warnings.length > 0 || description.trim().length < 400;
+  }, [job]);
   // Single source of truth for what is on screen. `result` used to outrank `workflowPhase`
   // in the render tree, so a result landing mid-run swapped the pipeline for the completion
   // screen and back. An in-flight run now keeps the pipeline mounted until it finishes.
@@ -2264,18 +2276,30 @@ export function App() {
           />
         </div>
       ) : screen === 'empty' || !job ? (
-        <section className={`${panelClass} max-w-[650px]`}>
-          <h2 className='mb-2 text-[22px] font-bold'>
-            Capture a job post to begin
-          </h2>
-          <p className='mt-0 mb-0'>
-            Open a job post in your browser, then choose <b>Extract Job</b> from
-            the ResiTailor extension.
-          </p>
-        </section>
+        <>
+          <section className={`${panelClass} max-w-[650px]`}>
+            <h2 className='mb-2 text-[22px] font-bold'>
+              Capture a job post to begin
+            </h2>
+            <p className='mt-0 mb-0'>
+              Open a job post in your browser, then choose <b>Extract Job</b>{' '}
+              from the ResiTailor extension.
+            </p>
+          </section>
+          <ImportJobPanel variant='empty' />
+        </>
       ) : (
         <>
           <JobPanel job={job} />
+          <details className={compactPanelClass} open={captureLooksThin}>
+            <summary className='cursor-pointer font-bold text-[#176a46]'>
+              Capture looks wrong? Import this job another way
+            </summary>
+            <ImportJobPanel
+              variant='review'
+              disabled={running || languageChanging}
+            />
+          </details>
           <section
             className={`${panelClass} flex flex-col items-start gap-[18px]`}
           >

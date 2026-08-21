@@ -1173,7 +1173,7 @@
     },
     {
       "term": "Développement front-end",
-      "kind": "technology",
+      "kind": "method_domain",
       "user_attested": true,
       "allow_model_role_placement": false
     },
@@ -1287,7 +1287,7 @@
     },
     {
       "term": "Décisions d’architecture",
-      "kind": "technology",
+      "kind": "responsibility",
       "user_attested": true,
       "allow_model_role_placement": false
     },
@@ -1305,7 +1305,7 @@
     },
     {
       "term": "Qualité du code",
-      "kind": "method_domain",
+      "kind": "technology",
       "user_attested": true,
       "allow_model_role_placement": false
     },
@@ -2356,6 +2356,180 @@
     },
     {
       "term": "Serverless",
+      "kind": "technology",
+      "user_attested": true,
+      "allow_model_role_placement": false
+    },
+    {
+      "term": "4 à 5 ans d’expérience minimum en développement Front-End",
+      "kind": "technology",
+      "user_attested": true,
+      "allow_model_role_placement": false
+    },
+    {
+      "term": "Aisance sur une application web complexe et évolutive",
+      "kind": "technology",
+      "user_attested": true,
+      "allow_model_role_placement": false
+    },
+    {
+      "term": "Consommation et intégration d’APIs REST",
+      "kind": "technology",
+      "user_attested": true,
+      "allow_model_role_placement": false
+    },
+    {
+      "term": "Diplôme d’une école d’ingénieurs",
+      "kind": "technology",
+      "user_attested": true,
+      "allow_model_role_placement": false
+    },
+    {
+      "term": "Excellente maîtrise de JavaScript",
+      "kind": "technology",
+      "user_attested": true,
+      "allow_model_role_placement": false
+    },
+    {
+      "term": "Framework JavaScript moderne",
+      "kind": "technology",
+      "user_attested": true,
+      "allow_model_role_placement": false
+    },
+    {
+      "term": "HTML / CSS",
+      "kind": "technology",
+      "user_attested": true,
+      "allow_model_role_placement": false
+    },
+    {
+      "term": "Performance web",
+      "kind": "method_domain",
+      "user_attested": true,
+      "allow_model_role_placement": false
+    },
+    {
+      "term": "Visualisation de données",
+      "kind": "method_domain",
+      "user_attested": true,
+      "allow_model_role_placement": false
+    },
+    {
+      "term": "Librairie JavaScript moderne",
+      "kind": "technology",
+      "user_attested": true,
+      "allow_model_role_placement": false
+    },
+    {
+      "term": "3+ years of software engineering experience",
+      "kind": "technology",
+      "user_attested": true,
+      "allow_model_role_placement": false
+    },
+    {
+      "term": "Accessibilité frontend",
+      "kind": "method_domain",
+      "user_attested": true,
+      "allow_model_role_placement": false
+    },
+    {
+      "term": "Arbitrages de performance frontend",
+      "kind": "technology",
+      "user_attested": true,
+      "allow_model_role_placement": false
+    },
+    {
+      "term": "Architecture de composants",
+      "kind": "technology",
+      "user_attested": true,
+      "allow_model_role_placement": false
+    },
+    {
+      "term": "Architecture frontend au niveau système",
+      "kind": "technology",
+      "user_attested": true,
+      "allow_model_role_placement": false
+    },
+    {
+      "term": "Compatibilité avec les lecteurs d’écran",
+      "kind": "technology",
+      "user_attested": true,
+      "allow_model_role_placement": false
+    },
+    {
+      "term": "Couverture de tests d’intégration",
+      "kind": "technology",
+      "user_attested": true,
+      "allow_model_role_placement": false
+    },
+    {
+      "term": "Couverture de tests unitaires",
+      "kind": "technology",
+      "user_attested": true,
+      "allow_model_role_placement": false
+    },
+    {
+      "term": "Couverture end-to-end",
+      "kind": "technology",
+      "user_attested": true,
+      "allow_model_role_placement": false
+    },
+    {
+      "term": "Discipline de test",
+      "kind": "technology",
+      "user_attested": true,
+      "allow_model_role_placement": false
+    },
+    {
+      "term": "Fondamentaux de l’accessibilité",
+      "kind": "method_domain",
+      "user_attested": true,
+      "allow_model_role_placement": false
+    },
+    {
+      "term": "Gestion d’état",
+      "kind": "technology",
+      "user_attested": true,
+      "allow_model_role_placement": false
+    },
+    {
+      "term": "HTML sémantique",
+      "kind": "technology",
+      "user_attested": true,
+      "allow_model_role_placement": false
+    },
+    {
+      "term": "Navigation au clavier",
+      "kind": "technology",
+      "user_attested": true,
+      "allow_model_role_placement": false
+    },
+    {
+      "term": "Patterns de récupération de données",
+      "kind": "technology",
+      "user_attested": true,
+      "allow_model_role_placement": false
+    },
+    {
+      "term": "Pilotage de projets frontend de bout en bout",
+      "kind": "responsibility",
+      "user_attested": true,
+      "allow_model_role_placement": false
+    },
+    {
+      "term": "Strong depth in React and TypeScript",
+      "kind": "technology",
+      "user_attested": true,
+      "allow_model_role_placement": false
+    },
+    {
+      "term": "Tests unitaires, d’intégration et end-to-end",
+      "kind": "method_domain",
+      "user_attested": true,
+      "allow_model_role_placement": false
+    },
+    {
+      "term": "Travail frontend epic-level de bout en bout",
       "kind": "technology",
       "user_attested": true,
       "allow_model_role_placement": false

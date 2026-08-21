@@ -169,29 +169,121 @@ fn parse_wellfound(payload: &serde_json::Value) -> serde_json::Value {
     })
 }
 
-/// Convert an HTML fragment to plain text.
+/// Tags whose *bodies* are not prose. On a whole fetched page these carry minified
+/// JavaScript, CSS selectors and inline SVG path data, none of which mean anything to a
+/// reader or to an extraction model, and all of which would otherwise be paid for as prompt
+/// tokens.
+const SKIP_BODY_TAGS: &[&str] = &[
+    "script", "style", "noscript", "svg", "template", "iframe", "head",
+];
+
+/// Tags that end a line of prose. Everything else (`<b>`, `<a>`, `<span>`) sits *inside* a
+/// sentence, so treating it as a line break would shred every paragraph into fragments.
+const BLOCK_TAGS: &[&str] = &[
+    "p", "div", "br", "li", "ul", "ol", "tr", "td", "th", "table", "section", "article",
+    "header", "footer", "nav", "aside", "main", "h1", "h2", "h3", "h4", "h5", "h6",
+    "blockquote", "pre", "hr", "dl", "dt", "dd", "form", "fieldset", "figure", "figcaption",
+];
+
+/// The lowercased element name in `<p class="x">` or `</p>`; empty for `<!doctype …>`.
+fn tag_name(tag: &str) -> String {
+    tag.trim_start_matches('<')
+        .trim_start_matches('/')
+        .chars()
+        .take_while(char::is_ascii_alphanumeric)
+        .collect()
+}
+
+/// Convert HTML to plain text.
 ///
-/// Job boards differ on which field carries the posting body: `parse_wttj` receives
-/// `description` as HTML, while the other parsers receive it as plain text. Stripping
-/// here lets every parser emit a plain `description` so downstream consumers (language
-/// detection, analysis prompts) can rely on one field.
-fn html_to_text(html: &str) -> String {
+/// Job boards differ on which field carries the posting body: the schema.org parser receives
+/// `description` as HTML, while the other parsers receive it as plain text. Stripping here lets
+/// every parser emit a plain `description` so downstream consumers (language detection, analysis
+/// prompts) can rely on one field.
+///
+/// `block_separator` is what a *block* tag boundary becomes. A description fragment wants `" "`,
+/// because it is rendered as one run of prose. A whole fetched page wants `"\n"`: the paragraph
+/// and list structure of a posting is most of the signal an extraction model has to work with,
+/// and flattening a requirements list into one line throws it away.
+fn strip_html(html: &str, block_separator: &str) -> String {
+    let lower = html.to_ascii_lowercase();
     let mut text = String::with_capacity(html.len());
-    let mut in_tag = false;
+    let mut cursor = 0usize;
+
+    while cursor < html.len() {
+        let Some(offset) = html[cursor..].find('<') else {
+            push_decoded(&mut text, &html[cursor..]);
+            break;
+        };
+        let open = cursor + offset;
+        push_decoded(&mut text, &html[cursor..open]);
+
+        // A comment ends at `-->`, not at the first `>`: `<!-- a > b -->` is one comment, and
+        // stopping early leaks its tail into the text.
+        if lower[open..].starts_with("<!--") {
+            cursor = lower[open + 4..]
+                .find("-->")
+                .map_or(html.len(), |end| open + 4 + end + 3);
+            continue;
+        }
+
+        let tag_end = html[open..]
+            .find('>')
+            .map_or(html.len(), |end| open + end + 1);
+        let name = tag_name(&lower[open..tag_end]);
+        let closing = lower[open..].starts_with("</");
+
+        if !closing && SKIP_BODY_TAGS.contains(&name.as_str()) {
+            text.push_str(block_separator);
+            // `<svg/>` has no body to skip; searching for its close tag would swallow the
+            // entire rest of the document.
+            let self_closing = html[open..tag_end].trim_end_matches('>').ends_with('/');
+            cursor = if self_closing {
+                tag_end
+            } else {
+                let close = format!("</{name}");
+                lower[tag_end..]
+                    .find(&close)
+                    .map_or(html.len(), |end| tag_end + end)
+            };
+            continue;
+        }
+
+        // A tag boundary must not glue neighbouring words together.
+        text.push_str(if BLOCK_TAGS.contains(&name.as_str()) {
+            block_separator
+        } else {
+            " "
+        });
+        cursor = tag_end;
+    }
+    text
+}
+
+/// Append a run of markup-free HTML text, resolving character references as it goes.
+fn push_decoded(text: &mut String, raw: &str) {
     let mut entity: Option<String> = None;
-    for character in html.chars() {
+    for character in raw.chars() {
         match character {
-            '<' => {
-                in_tag = true;
-                // Block boundaries must not glue neighbouring words together.
-                text.push(' ');
+            // A second `&` means the first one was a stray ampersand, not an entity opener.
+            '&' => {
+                if let Some(name) = entity.take() {
+                    text.push('&');
+                    text.push_str(&name);
+                }
+                entity = Some(String::new());
             }
-            '>' if in_tag => in_tag = false,
-            _ if in_tag => {}
-            '&' => entity = Some(String::new()),
             ';' if entity.is_some() => {
                 let name = entity.take().unwrap_or_default();
-                text.push_str(decode_entity(&name));
+                match decode_entity_owned(&name) {
+                    Some(decoded) => text.push_str(&decoded),
+                    // Showing an entity we cannot resolve beats silently dropping content.
+                    None => {
+                        text.push('&');
+                        text.push_str(&name);
+                        text.push(';');
+                    }
+                }
             }
             _ => match entity.as_mut() {
                 // Entity names are short; anything longer is a stray ampersand.
@@ -210,7 +302,38 @@ fn html_to_text(html: &str) -> String {
         text.push('&');
         text.push_str(&name);
     }
-    text.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+fn html_to_text(html: &str) -> String {
+    strip_html(html, " ")
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// Whole-page variant of [`strip_html`]: one line per block, blank lines dropped.
+pub(crate) fn html_to_block_text(html: &str) -> String {
+    strip_html(html, "\n")
+        .lines()
+        .map(|line| line.split_whitespace().collect::<Vec<_>>().join(" "))
+        .filter(|line| !line.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn decode_entity_owned(name: &str) -> Option<String> {
+    let known = decode_entity(name);
+    if !known.is_empty() {
+        return Some(known.to_string());
+    }
+    // Numeric references are open-ended, so a named table can never cover them. A French
+    // posting served as `&#233;` would otherwise lose every accent it has.
+    let digits = name.strip_prefix('#')?;
+    let code = match digits.strip_prefix(['x', 'X']) {
+        Some(hex) => u32::from_str_radix(hex, 16).ok()?,
+        None => digits.parse().ok()?,
+    };
+    char::from_u32(code).map(String::from)
 }
 
 fn decode_entity(name: &str) -> &'static str {
@@ -240,7 +363,12 @@ fn decode_entity(name: &str) -> &'static str {
     }
 }
 
-fn parse_wttj(payload: &serde_json::Value) -> serde_json::Value {
+/// schema.org `JobPosting`.
+///
+/// Welcome to the Jungle embeds one of these, and so does most of the ATS-hosted web, so the
+/// same reader serves the board scraper and the URL importer. `domain` is the label the parsed
+/// capture carries; it is what `JobPanel` switches on to pick a renderer.
+fn parse_schema_org_job_posting(payload: &serde_json::Value, domain: &str) -> serde_json::Value {
     let job = &payload["json"];
     let org = &job["hiringOrganization"];
     let org_addr = &org["address"];
@@ -291,24 +419,29 @@ fn parse_wttj(payload: &serde_json::Value) -> serde_json::Value {
 
     let title = job["title"].as_str().unwrap_or("");
     let description_html = job["description"].as_str().unwrap_or("");
-    let description = html_to_text(description_html);
+    let mut description = html_to_text(description_html);
+    // Some feeds escape the description twice, so one pass leaves `&lt;p&gt;` as visible
+    // `<p>` markup. A second pass costs nothing and turns that back into prose.
+    if description.contains("</") {
+        description = html_to_text(&description);
+    }
     let company = org["name"].as_str().unwrap_or("");
 
     if title.is_empty() {
         warnings.push("Missing field: title".into());
-        eprintln!("[parser:wttj] Warning: missing title");
+        eprintln!("[parser:{domain}] Warning: missing title");
     }
     if description_html.is_empty() {
         warnings.push("Missing field: description_html".into());
-        eprintln!("[parser:wttj] Warning: missing description_html");
+        eprintln!("[parser:{domain}] Warning: missing description_html");
     }
     if company.is_empty() {
         warnings.push("Missing field: company".into());
-        eprintln!("[parser:wttj] Warning: missing company");
+        eprintln!("[parser:{domain}] Warning: missing company");
     }
 
     serde_json::json!({
-        "domain": "welcometothejungle",
+        "domain": domain,
         "parsed": true,
         "url": payload["sourceUrl"].as_str().unwrap_or(""),
         "title": title,
@@ -364,12 +497,116 @@ fn parse_indeed(payload: &serde_json::Value) -> serde_json::Value {
     })
 }
 
+/// The label a manually imported capture carries as its `domain`.
+///
+/// The full host, never a shortened form: `JobPanel` switches on `domain`, so a bare `indeed`
+/// would route an imported capture into the Indeed renderer, which reads Indeed's own field
+/// shape. A full host matches none of those arms and falls through to the generic renderer.
+fn imported_domain_label(payload: &serde_json::Value) -> String {
+    let source_url = payload["sourceUrl"].as_str().unwrap_or("").trim();
+    if source_url.is_empty() {
+        return "pasted-text".to_string();
+    }
+    reqwest::Url::parse(source_url)
+        .ok()
+        .and_then(|url| url.host_str().map(String::from))
+        .unwrap_or_else(|| "imported".to_string())
+}
+
+/// A capture the app extracted for itself with the AI layer.
+///
+/// `payload["json"]` is the model's `ExtractedJob`, whose keys deliberately match the ones the
+/// board parsers emit, so everything downstream of here sees no difference.
+fn parse_extracted_job(payload: &serde_json::Value, domain: &str) -> serde_json::Value {
+    let job = &payload["json"];
+    let mut warnings: Vec<String> = Vec::new();
+
+    let title = job["title"].as_str().unwrap_or("").trim();
+    let description = job["description"].as_str().unwrap_or("").trim();
+    let company = job["company"].as_str().unwrap_or("").trim();
+
+    if title.is_empty() {
+        warnings.push("Missing field: title".into());
+        eprintln!("[parser:{domain}] Warning: missing title");
+    }
+    if description.is_empty() {
+        warnings.push("Missing field: description".into());
+        eprintln!("[parser:{domain}] Warning: missing description");
+    }
+    if company.is_empty() {
+        warnings.push("Missing field: company".into());
+        eprintln!("[parser:{domain}] Warning: missing company");
+    }
+
+    // An AI-derived capture always announces itself. The user is looking at this panel
+    // precisely because some earlier capture was wrong, so "a model wrote this" is the single
+    // most useful thing the panel can tell them.
+    warnings.push(
+        if payload["source"].as_str() == Some("text_import") {
+            "Imported by AI from pasted text - check the details against the original post."
+        } else {
+            "Imported by AI from the page text - check the details against the original post."
+        }
+        .into(),
+    );
+    if job["extraction_confidence"].as_str().unwrap_or("high") != "high" {
+        warnings.push("The AI was not confident about this extraction.".into());
+    }
+
+    let mut parsed = serde_json::json!({
+        "domain": domain,
+        "parsed": true,
+        "url": payload["sourceUrl"].as_str().unwrap_or(""),
+        "title": title,
+        "description": description,
+        "company": company,
+        "location": job["location"],
+        "locations": job["locations"],
+        "job_type": job["job_type"],
+        "remote": job["remote"],
+        "compensation": job["compensation"],
+        "qualifications": job["qualifications"],
+        "skills": job["skills"],
+        "years_experience_min": job["years_experience_min"],
+        "years_experience_max": job["years_experience_max"],
+        "date_posted": job["date_posted"],
+        "education_requirement": job["education_requirement"],
+        "company_description": job["company_description"],
+        "company_hq": job["company_hq"],
+        "industry_tags": job["industry_tags"],
+        "warnings": warnings,
+    });
+    // The model returns null for anything the post did not state. `prompt_job_view` drops
+    // nulls on the way to a prompt, but the capture the panel renders should not carry them
+    // either.
+    if let Some(object) = parsed.as_object_mut() {
+        object.retain(|_, value| !value.is_null());
+    }
+    parsed
+}
+
 pub(crate) fn parse_job_data(payload: &serde_json::Value) -> serde_json::Value {
+    // An imported capture names its own parser, and must do so before the board chain gets a
+    // look. Its `sourceUrl` may well point at a board that has a scraper below, but the payload
+    // was never produced by that scraper, so that parser would read the wrong shape out of
+    // `json` and silently drop the posting.
+    if matches!(
+        payload["source"].as_str(),
+        Some("url_import" | "text_import")
+    ) {
+        let domain = imported_domain_label(payload);
+        return if payload["extraction"].as_str() == Some("json_ld") {
+            parse_schema_org_job_posting(payload, &domain)
+        } else {
+            parse_extracted_job(payload, &domain)
+        };
+    }
+
     let source_url = payload["sourceUrl"].as_str().unwrap_or("");
     if source_url.contains("wellfound.com") {
         parse_wellfound(payload)
     } else if source_url.contains("welcometothejungle.com") {
-        parse_wttj(payload)
+        parse_schema_org_job_posting(payload, "welcometothejungle")
     } else if source_url.contains("indeed.com") {
         parse_indeed(payload)
     } else {
@@ -922,8 +1159,8 @@ pub async fn start_server(app_handle: AppHandle) {
 #[cfg(test)]
 mod tests {
     use super::{
-        html_to_text, parse_job_data, parse_latest_capture, prompt_job_view, write_latest_capture,
-        CapturedJob,
+        html_to_block_text, html_to_text, parse_job_data, parse_latest_capture, prompt_job_view,
+        write_latest_capture, CapturedJob,
     };
     use serde_json::json;
     use std::{
@@ -1139,5 +1376,201 @@ mod tests {
             prompt_job_view(&serde_json::json!("not an object")),
             serde_json::json!("not an object")
         );
+    }
+
+    #[test]
+    fn html_to_text_drops_script_and_style_bodies() {
+        let page = "<style>.a{color:red}</style><p>Rust Engineer</p>\
+                    <script>window.__NEXT_DATA__={\"secret\":1}</script><p>Build services.</p>";
+        let text = html_to_text(page);
+
+        assert_eq!(text, "Rust Engineer Build services.");
+        assert!(!text.contains("__NEXT_DATA__"));
+        assert!(!text.contains("color:red"));
+    }
+
+    #[test]
+    fn html_to_text_ends_a_comment_at_the_comment_close() {
+        // The `>` inside the comment does not end it, so nothing after that `>` may leak into
+        // the text. A comment is also not a word boundary, so it must not split `ad` either.
+        assert_eq!(
+            html_to_text("<p>Rust<!-- version > 1.70 --> and Axum</p>"),
+            "Rust and Axum"
+        );
+        assert_eq!(html_to_text("<p>a<!-- b > c -->d</p>"), "ad");
+    }
+
+    #[test]
+    fn html_to_text_keeps_inline_markup_inside_one_sentence() {
+        assert_eq!(
+            html_to_text("<p>We need <b>Rust</b> and <i>Axum</i>.</p>"),
+            "We need Rust and Axum ."
+        );
+    }
+
+    #[test]
+    fn html_to_text_decodes_numeric_character_references() {
+        // A French post served as numeric references would otherwise lose every accent.
+        assert_eq!(
+            html_to_text("exp&#233;rience &#x00e9;quipe"),
+            "exp\u{e9}rience \u{e9}quipe"
+        );
+    }
+
+    #[test]
+    fn html_to_block_text_keeps_one_line_per_block() {
+        let page = "<html><head><title>t</title><style>.a{}</style></head><body>\
+                    <h2>Requirements</h2><ul><li>Rust</li><li>Axum</li></ul></body></html>";
+
+        assert_eq!(html_to_block_text(page), "Requirements\nRust\nAxum");
+    }
+
+    #[test]
+    fn an_imported_capture_bypasses_the_board_parsers() {
+        // The whole design rests on this. An imported capture's URL may point at a board that
+        // has a scraper, but the payload was never produced by that scraper.
+        let parsed = parse_job_data(&json!({
+            "source": "url_import",
+            "extraction": "llm",
+            "sourceUrl": "https://www.indeed.com/viewjob?jk=1",
+            "json": {
+                "is_job_posting": true,
+                "title": "Rust Engineer",
+                "company": "Acme",
+                "description": "Build reliable services.",
+                "skills": ["Rust", "Axum"],
+                "extraction_confidence": "high"
+            }
+        }));
+
+        assert_ne!(parsed["domain"], "indeed");
+        assert_eq!(parsed["domain"], "www.indeed.com");
+        assert_eq!(parsed["parsed"], true);
+        assert_eq!(parsed["title"], "Rust Engineer");
+        assert_eq!(parsed["skills"][1], "Axum");
+    }
+
+    #[test]
+    fn an_imported_json_ld_capture_reuses_the_schema_org_parser() {
+        let parsed = parse_job_data(&json!({
+            "source": "url_import",
+            "extraction": "json_ld",
+            "sourceUrl": "https://boards.greenhouse.io/acme/jobs/1",
+            "json": {
+                "title": "Rust Engineer",
+                "description": "<p>Build services.</p>",
+                "employmentType": "FULL_TIME",
+                "hiringOrganization": { "name": "Acme" },
+                "jobLocation": [{
+                    "address": { "addressLocality": "Paris", "addressCountry": "France" }
+                }]
+            }
+        }));
+
+        assert_eq!(parsed["domain"], "boards.greenhouse.io");
+        assert_eq!(parsed["description"], "Build services.");
+        assert_eq!(parsed["description_html"], "<p>Build services.</p>");
+        assert_eq!(parsed["locations"][0], "Paris, France");
+        assert_eq!(parsed["job_type"], "Full-time");
+    }
+
+    #[test]
+    fn a_double_escaped_description_is_stripped_twice() {
+        let parsed = parse_job_data(&json!({
+            "source": "url_import",
+            "extraction": "json_ld",
+            "sourceUrl": "https://boards.greenhouse.io/acme/jobs/1",
+            "json": { "title": "Engineer", "description": "&lt;p&gt;Build services.&lt;/p&gt;" }
+        }));
+
+        assert_eq!(parsed["description"], "Build services.");
+    }
+
+    #[test]
+    fn a_pasted_text_capture_has_no_host_to_name() {
+        let parsed = parse_job_data(&json!({
+            "source": "text_import",
+            "extraction": "llm",
+            "sourceUrl": "",
+            "json": {
+                "title": "Rust Engineer",
+                "company": "Acme",
+                "description": "Build services.",
+                "extraction_confidence": "high"
+            }
+        }));
+
+        assert_eq!(parsed["domain"], "pasted-text");
+        assert_eq!(parsed["url"], "");
+    }
+
+    #[test]
+    fn an_ai_imported_capture_says_so_and_flags_low_confidence() {
+        let parsed = parse_job_data(&json!({
+            "source": "text_import",
+            "extraction": "llm",
+            "sourceUrl": "",
+            "json": {
+                "title": "Rust Engineer",
+                "company": "Acme",
+                "description": "Build services.",
+                "extraction_confidence": "low"
+            }
+        }));
+        let joined = parsed["warnings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|warning| warning.as_str())
+            .collect::<Vec<_>>()
+            .join(" | ");
+
+        assert!(
+            joined.contains("Imported by AI from pasted text"),
+            "{joined}"
+        );
+        assert!(joined.contains("not confident"), "{joined}");
+    }
+
+    #[test]
+    fn an_imported_capture_drops_the_fields_the_post_did_not_state() {
+        let parsed = parse_job_data(&json!({
+            "source": "url_import",
+            "extraction": "llm",
+            "sourceUrl": "https://jobs.example.test/1",
+            "json": {
+                "title": "Rust Engineer",
+                "company": "Acme",
+                "description": "Build services.",
+                "compensation": null,
+                "remote": null,
+                "extraction_confidence": "high"
+            }
+        }));
+
+        assert!(parsed.get("compensation").is_none());
+        assert!(parsed.get("remote").is_none());
+    }
+
+    #[test]
+    fn prompt_job_view_on_an_imported_capture_carries_no_page_text() {
+        // `sourceText` is a debugging handle on the payload. It must never become a prompt.
+        let payload = json!({
+            "source": "url_import",
+            "extraction": "llm",
+            "sourceUrl": "https://jobs.example.test/1",
+            "sourceText": "the entire fetched page, navigation and all",
+            "json": {
+                "title": "Rust Engineer",
+                "company": "Acme",
+                "description": "Build services.",
+                "extraction_confidence": "high"
+            }
+        });
+        let view = prompt_job_view(&parse_job_data(&payload));
+
+        assert!(view.get("sourceText").is_none());
+        assert!(view.get("raw").is_none());
+        assert_eq!(view["description"], "Build services.");
     }
 }

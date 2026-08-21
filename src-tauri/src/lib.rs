@@ -6,6 +6,7 @@ mod config;
 mod error;
 mod evidence;
 mod http;
+mod job_import;
 mod server;
 mod tailoring;
 
@@ -24,6 +25,8 @@ pub fn run() {
             commands::get_latest_pipeline_result,
             commands::get_latest_pipeline_result_any_language,
             commands::record_ui_result_state,
+            commands::import_job_from_url,
+            commands::import_job_from_text,
             commands::analyze_latest_job,
             commands::prepare_evidence_preflight,
             commands::generate_tailored_resume,

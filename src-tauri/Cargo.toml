@@ -21,7 +21,10 @@ axum = "0.7"
 atomicwrites = "0.4"
 dotenvy = "0.15"
 lopdf = "0.36"
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+# `charset` is what makes `Response::text()` honour a page's declared encoding. Without it a
+# job post served as ISO-8859-1 loses every accent, which then poisons language detection
+# and the analysis prompt. `encoding_rs` is already in the lockfile, so it costs nothing.
+reqwest = { version = "0.12", default-features = false, features = ["charset", "json", "rustls-tls"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.10"

@@ -6,7 +6,8 @@ use crate::{
         load_evidence_bank, placement_equivalent_terms, preflight_items, remove_evidence,
         save_selected_evidence, EvidenceBank, EvidenceEntry, PreflightItem, SelectedEvidence,
     },
-    server::{load_latest_capture, CapturedJob},
+    job_import::{import_from_text, import_from_url, ImportedJob},
+    server::{load_latest_capture, persist_capture, CapturedJob},
     tailoring::{
         content_changes, failed_response, load_base_resume, publish_variant_artifact,
         tailor_and_render_with_progress, workspace_root, ArtifactProvenance, BulletKeywordEmphasis,
@@ -363,6 +364,49 @@ pub async fn run_resume_pipeline(
         capture_id, language
     );
     Ok(PipelineResult { analysis, resume })
+}
+
+/// Import a job post by fetching the page the user pasted a link to.
+#[tauri::command]
+pub async fn import_job_from_url(app: AppHandle, url: String) -> Result<CapturedJob, AppError> {
+    let imported = import_from_url(&url)
+        .await
+        .map_err(|error| AppError::Message(error.to_string()))?;
+    finish_import(&app, imported)
+}
+
+/// Import a job post from text the user pasted, for the boards that refuse to be fetched.
+#[tauri::command]
+pub async fn import_job_from_text(
+    app: AppHandle,
+    text: String,
+    source_url: Option<String>,
+) -> Result<CapturedJob, AppError> {
+    let imported = import_from_text(&text, source_url.as_deref())
+        .await
+        .map_err(|error| AppError::Message(error.to_string()))?;
+    finish_import(&app, imported)
+}
+
+/// Persist and announce an import exactly the way `/captures` announces an extension capture.
+///
+/// The event is what actually drives the UI: its listener owns the whole new-capture reset, so
+/// the caller must not apply the returned capture itself. Doing both would make the listener
+/// discard the event as a duplicate and skip the reset, stranding the previous run's result and
+/// preflight on top of a different job.
+fn finish_import(app: &AppHandle, imported: ImportedJob) -> Result<CapturedJob, AppError> {
+    let captured = persist_capture(&imported.payload).map_err(AppError::Message)?;
+    // Which path ran is the difference between a free import and a paid one, so it is worth
+    // being able to see without going digging in `data/api-usage/`.
+    eprintln!(
+        "[job-import] capture {} extracted via {}",
+        captured.received_at_ms,
+        imported.extraction.label()
+    );
+    if let Err(error) = app.emit("job-data-received", &captured) {
+        eprintln!("[job-import] Failed to emit capture event: {error}");
+    }
+    Ok(captured)
 }
 
 #[tauri::command]

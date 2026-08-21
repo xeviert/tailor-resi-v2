@@ -260,7 +260,13 @@ pub async fn analyze_job(
     Err(last_error.unwrap_or_else(|| AnalysisError::Request("no attempt was made".to_string())))
 }
 
-pub fn parse_job_analysis_from_response(body: &str) -> Result<JobAnalysis, AnalysisError> {
+/// The structured-output JSON text carried by a Responses API body, or the specific reason
+/// there is none.
+///
+/// Every structured call this app makes shares the same envelope, so it shares this reader
+/// too: a refusal, a truncated response and a malformed schema are three different problems
+/// and each one deserves its own message, whichever stage hit it.
+pub(crate) fn structured_output_text(body: &str) -> Result<String, AnalysisError> {
     if body.trim().is_empty() {
         return Err(AnalysisError::EmptyResponseBody);
     }
@@ -287,7 +293,12 @@ pub fn parse_job_analysis_from_response(body: &str) -> Result<JobAnalysis, Analy
     if let Some(reason) = incomplete_reason(&response) {
         return Err(AnalysisError::IncompleteResponse(reason.to_string()));
     }
-    serde_json::from_str(text).map_err(|error| AnalysisError::InvalidJson(error.to_string()))
+    Ok(text.to_string())
+}
+
+pub fn parse_job_analysis_from_response(body: &str) -> Result<JobAnalysis, AnalysisError> {
+    let text = structured_output_text(body)?;
+    serde_json::from_str(&text).map_err(|error| AnalysisError::InvalidJson(error.to_string()))
 }
 
 /// `Some(reason)` when the model stopped before finishing, e.g. `"max_output_tokens"`.

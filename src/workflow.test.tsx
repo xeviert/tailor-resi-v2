@@ -116,6 +116,18 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
+// Wrapped in act() so the resulting state updates are flushed before we assert;
+// otherwise an assertion can pass against the pre-event render.
+async function emit(event: string, payload: unknown) {
+  const handlers = mocks.listen.mock.calls
+    .filter(([name]) => name === event)
+    .map(([, handler]) => handler as (e: { payload: unknown }) => void);
+  expect(handlers.length).toBeGreaterThan(0);
+  await act(async () => {
+    for (const handler of handlers) handler({ payload });
+  });
+}
+
 describe('review-to-tailoring workflow', () => {
   it('shows output language before analysis and opens an immediate focused pipeline', async () => {
     render(<App />);
@@ -452,18 +464,6 @@ describe('review-to-tailoring workflow', () => {
 });
 
 describe('render stability during a run', () => {
-  // Wrapped in act() so the resulting state updates are flushed before we assert;
-  // otherwise an assertion can pass against the pre-event render.
-  async function emit(event: string, payload: unknown) {
-    const handlers = mocks.listen.mock.calls
-      .filter(([name]) => name === event)
-      .map(([, handler]) => handler as (e: { payload: unknown }) => void);
-    expect(handlers.length).toBeGreaterThan(0);
-    await act(async () => {
-      for (const handler of handlers) handler({ payload });
-    });
-  }
-
   function storedResult(overrides: Record<string, unknown> = {}) {
     return {
       schema_version: 2,
@@ -583,5 +583,123 @@ describe('render stability during a run', () => {
         screen.getByRole('button', { name: 'Generate tailored PDF' }),
       ).toBeVisible(),
     );
+  });
+});
+
+describe('importing a job by hand', () => {
+  it('offers the import panel when there is no capture at all', async () => {
+    mocks.invoke.mockImplementation((command: string) =>
+      command === 'get_evidence_bank'
+        ? Promise.resolve({ version: 1, entries: [] })
+        : Promise.resolve(null),
+    );
+    render(<App />);
+
+    expect(await screen.findByText('Capture a job post to begin')).toBeVisible();
+    expect(screen.getByRole('group', { name: 'Import mode' })).toBeVisible();
+    expect(screen.getByLabelText('Job post URL')).toBeVisible();
+  });
+
+  it('opens the re-import panel unprompted when the capture looks thin', async () => {
+    // The failure this feature exists for: the extension shipped an og:description scrape.
+    mocks.invoke.mockImplementation((command: string) => {
+      if (command === 'get_latest_job') {
+        return Promise.resolve({
+          received_at_ms: 42,
+          payload: {},
+          parsed: {
+            domain: 'wellfound',
+            title: 'Fronted Engineer',
+            company: '',
+            description: 'Censys is hiring a Fronted Engineer - Apply now!',
+            warnings: ['Missing field: company'],
+          },
+        });
+      }
+      if (command === 'get_evidence_bank')
+        return Promise.resolve({ version: 1, entries: [] });
+      return Promise.resolve(null);
+    });
+    render(<App />);
+
+    const disclosure = await screen.findByText(
+      'Capture looks wrong? Import this job another way',
+    );
+    expect(disclosure.closest('details')).toHaveAttribute('open');
+  });
+
+  it('leaves the re-import panel collapsed for a healthy capture', async () => {
+    mocks.invoke.mockImplementation((command: string) => {
+      if (command === 'get_latest_job') {
+        return Promise.resolve({
+          received_at_ms: 42,
+          payload: {},
+          parsed: {
+            domain: 'indeed',
+            title: 'Backend Engineer',
+            company: 'Example Co',
+            description: 'A full posting. '.repeat(40),
+            warnings: [],
+          },
+        });
+      }
+      if (command === 'get_evidence_bank')
+        return Promise.resolve({ version: 1, entries: [] });
+      return Promise.resolve(null);
+    });
+    render(<App />);
+
+    const disclosure = await screen.findByText(
+      'Capture looks wrong? Import this job another way',
+    );
+    // It must never compete with the primary Analyze action when nothing is wrong.
+    expect(disclosure.closest('details')).not.toHaveAttribute('open');
+  });
+
+  it('replaces a bad capture and stops at the review screen', async () => {
+    render(<App />);
+    expect(
+      await screen.findByText('Unique captured job description.'),
+    ).toBeVisible();
+
+    fireEvent.change(screen.getByLabelText('Job post URL'), {
+      target: { value: 'https://boards.greenhouse.io/acme/jobs/1' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Fetch and import' }));
+
+    await waitFor(() =>
+      expect(mocks.invoke).toHaveBeenCalledWith('import_job_from_url', {
+        url: 'https://boards.greenhouse.io/acme/jobs/1',
+      }),
+    );
+
+    // The backend drives the swap through the same event an extension capture uses; the panel
+    // deliberately does not apply the capture it was handed back.
+    await emit('job-data-received', {
+      received_at_ms: 99,
+      payload: {},
+      parsed: {
+        domain: 'boards.greenhouse.io',
+        title: 'Senior Rust Engineer',
+        company: 'Acme',
+        description: 'The complete posting, requirements and all.',
+      },
+    });
+
+    expect(
+      await screen.findByText('The complete posting, requirements and all.'),
+    ).toBeVisible();
+    expect(
+      screen.queryByText('Unique captured job description.'),
+    ).not.toBeInTheDocument();
+
+    // Stopping at review is the whole point: a bad extraction must not silently spend an
+    // analysis call before the user has looked at it.
+    expect(screen.getByRole('button', { name: 'Analyze job' })).toBeVisible();
+    expect(
+      mocks.invoke.mock.calls.filter(
+        ([command]) => command === 'analyze_latest_job',
+      ),
+    ).toHaveLength(0);
   });
 });
