@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 
 // Style constants and `errorText` are copied rather than imported from `main.tsx`, which
@@ -26,6 +26,8 @@ const segmentedButtonClass = (active: boolean, first: boolean) =>
       : 'bg-white text-[#19221d] hover:bg-[#f3f6f3]',
     'disabled:cursor-wait disabled:opacity-65',
   ].join(' ');
+const secondaryButtonClass =
+  'cursor-pointer rounded-lg border border-[#cbd4cc] bg-white px-[13px] py-[11px] font-bold text-[#19221d]';
 const alertClass =
   'mt-3 mb-0 rounded-lg bg-[#fff3eb] px-3 py-2.5 text-[#9e411e]';
 
@@ -34,9 +36,33 @@ const MIN_PASTED_CHARS = 200;
 
 type Mode = 'url' | 'text';
 
+/** Seconds spent so far. A counter that moves is the difference between slow and hung. */
+function ElapsedTime({ since }: { since: number }) {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    setNow(Date.now());
+    const timer = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, [since]);
+  const total = Math.max(0, Math.floor((now - since) / 1000));
+  const minutes = Math.floor(total / 60);
+  const seconds = total % 60;
+  return <>{`${minutes}:${String(seconds).padStart(2, '0')}`}</>;
+}
+
 function errorText(reason: unknown) {
   if (typeof reason === 'string') return reason;
   if (reason instanceof Error) return reason.message;
+  // A rejected Tauri command arrives as the serialized `AppError`, `{code, message}`. Without
+  // this branch every backend failure reached the user as raw JSON.
+  if (
+    reason &&
+    typeof reason === 'object' &&
+    typeof (reason as { message?: unknown }).message === 'string'
+  ) {
+    const message = (reason as { message: string }).message.trim();
+    if (message) return message;
+  }
   try {
     return JSON.stringify(reason);
   } catch {
@@ -66,7 +92,13 @@ export function ImportJobPanel({
   const [url, setUrl] = useState('');
   const [text, setText] = useState('');
   const [busy, setBusy] = useState(false);
+  const [startedAt, setStartedAt] = useState<number | null>(null);
   const [error, setError] = useState('');
+  // Bumped by Cancel. The in-flight import keeps running - if it succeeds it still emits
+  // `job-data-received` and the app moves onto the new job - but this form stops treating
+  // itself as busy and stops clearing the fields out from under the user. A ref, because
+  // the awaited continuation below closes over the value from before the cancel.
+  const attemptRef = useRef(0);
 
   const locked = busy || Boolean(disabled);
 
@@ -87,7 +119,9 @@ export function ImportJobPanel({
       return;
     }
 
+    const thisAttempt = attemptRef.current;
     setBusy(true);
+    setStartedAt(Date.now());
     setError('');
     try {
       if (mode === 'url') {
@@ -98,15 +132,29 @@ export function ImportJobPanel({
           sourceUrl: trimmedUrl || null,
         });
       }
+      if (thisAttempt !== attemptRef.current) return;
       setUrl('');
       setText('');
       onImported?.();
     } catch (reason) {
+      if (thisAttempt !== attemptRef.current) return;
       console.error('[job-import] import rejected', reason);
       setError(errorText(reason));
     } finally {
-      setBusy(false);
+      if (thisAttempt === attemptRef.current) {
+        setBusy(false);
+        setStartedAt(null);
+      }
     }
+  }
+
+  function cancel() {
+    attemptRef.current += 1;
+    setBusy(false);
+    setStartedAt(null);
+    setError(
+      'Stopped waiting. The import may still finish on its own - if it does, the job will appear here.',
+    );
   }
 
   return (
@@ -184,7 +232,7 @@ export function ImportJobPanel({
             onChange={(event) => setUrl(event.target.value)}
           />
         </label>
-        <div>
+        <div className='flex flex-wrap items-center gap-2.5'>
           <button className={primaryButtonClass} type='submit' disabled={locked}>
             {busy
               ? 'Importing...'
@@ -192,16 +240,35 @@ export function ImportJobPanel({
                 ? 'Fetch and import'
                 : 'Import pasted text'}
           </button>
+          {busy && (
+            <button
+              className={secondaryButtonClass}
+              data-testid='cancel-import'
+              onClick={cancel}
+              type='button'
+            >
+              Cancel
+            </button>
+          )}
         </div>
       </form>
 
-      {/* A silent twenty-second wait reads as a hang, so say what is happening. */}
+      {/* A silent wait reads as a hang, so say what is happening and keep a counter moving.
+          The old copy promised 10-30 seconds against a backend that can legitimately spend
+          minutes on a long posting, which made every slow import look broken. */}
       <p className='mt-3 mb-0 min-h-[18px] text-[12px] text-[#627067]' aria-live='polite'>
-        {busy
-          ? mode === 'url'
-            ? 'Fetching the page and reading the posting. This usually takes 10-30 seconds.'
-            : 'Reading the posting. This usually takes 10-30 seconds.'
-          : ''}
+        {busy && startedAt !== null ? (
+          <>
+            {mode === 'url'
+              ? 'Fetching the page and reading the posting'
+              : 'Reading the posting'}
+            {' - '}
+            <ElapsedTime since={startedAt} /> elapsed. Usually under a minute; a long
+            posting can take several.
+          </>
+        ) : (
+          ''
+        )}
       </p>
 
       {error && (

@@ -92,6 +92,19 @@ must stay out of the resume.
    the same prose as `description` wrapped in markup. Analysis retries a
    transient rate limit or server fault; every other error is terminal.
 
+   Analysis reports its two stages — `ats_analysis` and `evidence_preflight` —
+   through the same `resume-pipeline-progress` event the document pipeline uses,
+   so the review screen shows a live stage list, an elapsed counter, and a
+   **Cancel** button rather than a button that only reads "Working...". A long
+   posting can legitimately occupy the model for minutes, and a silent wait is
+   indistinguishable from a hung one.
+
+   Cancel abandons the wait, not the work: the request has already been sent and
+   its tokens are already spent, so the Rust call runs to completion and still
+   writes its usage receipt. What Cancel guarantees is that the abandoned run can
+   never repaint the screen afterwards — its progress and result events are
+   dropped until the next deliberate run starts.
+
    This step identifies ATS-relevant terms and phrases, but it does not rewrite
    resume content.
 
@@ -187,6 +200,15 @@ must stay out of the resume.
    without spending another tailoring run, and its primary action reads **Re-run
    tailoring** to make clear that it would overwrite the existing result.
 
+   **Start over** is how the next job begins. It appears on both the summary and the
+   review screen, asks for confirmation, and then clears `data/job-captures/latest.json`
+   through `clear_latest_job`, returning the app to the empty "Capture a job post to
+   begin" screen with the import panel ready. Only the pointer is removed: the
+   timestamped capture, the variants, and the result snapshot all stay on disk, so the
+   job is abandoned rather than erased. Because the pointer is what the app opens with,
+   the reset survives a restart — which is the difference between starting over and
+   merely navigating away.
+
    A verified employer-facing artifact is atomically published to the stable
    `Downloads/Xevier_T_CV_<lang>.pdf` filename. If PDF output is not available
    but a DOCX passed validation, the validated DOCX is published instead. Only one
@@ -272,6 +294,7 @@ The desktop UI uses the reviewed command path instead:
   the same `job-data-received` event, so the desktop UI cannot tell an imported
   job from a captured one.
 - `analyze_latest_job` for analysis plus evidence preflight.
+- `clear_latest_job` to forget the current capture and start over.
 - `prepare_evidence_preflight` when switching EN/FR after analysis.
 - `generate_tailored_resume` for reviewed tailoring and artifact generation.
 - `retailor_resume_with_evidence` for the optional omitted-term loop.

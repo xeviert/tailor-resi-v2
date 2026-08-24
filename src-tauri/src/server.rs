@@ -673,7 +673,7 @@ pub fn prompt_job_view(parsed: &serde_json::Value) -> serde_json::Value {
         .into()
 }
 
-fn capture_directory() -> Result<PathBuf, String> {
+pub(crate) fn capture_directory() -> Result<PathBuf, String> {
     crate::tailoring::workspace_root()
         .map(|root| root.join("data").join("job-captures"))
         .map_err(|error| error.to_string())
@@ -717,6 +717,19 @@ fn write_latest_capture(path: &std::path::Path, text: &str) -> Result<(), String
         return Err(error.to_string());
     }
     Ok(())
+}
+
+/// Drop the pointer to the job the app opens with.
+///
+/// Removing a file that is already gone is the state the caller asked for, not a failure -
+/// Start over pressed twice must not report an error. Only the pointer goes: the
+/// timestamped capture it was copied from stays in the same directory.
+pub(crate) fn remove_latest_capture(path: &std::path::Path) -> Result<(), String> {
+    match fs::remove_file(path) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error.to_string()),
+    }
 }
 
 fn parse_latest_capture(text: &str) -> Result<Option<CapturedJob>, serde_json::Error> {
@@ -1160,7 +1173,7 @@ pub async fn start_server(app_handle: AppHandle) {
 mod tests {
     use super::{
         html_to_block_text, html_to_text, parse_job_data, parse_latest_capture, prompt_job_view,
-        write_latest_capture, CapturedJob,
+        remove_latest_capture, write_latest_capture, CapturedJob,
     };
     use serde_json::json;
     use std::{
@@ -1327,6 +1340,32 @@ mod tests {
 
         assert_eq!(fs::read_to_string(&latest).unwrap(), "{\"version\":2}\n");
         assert_eq!(fs::read_dir(&directory).unwrap().count(), 1);
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn clearing_the_latest_capture_is_idempotent_and_keeps_the_archive() {
+        let suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let directory = std::env::temp_dir().join(format!("resi-tailor-clear-{suffix}"));
+        fs::create_dir_all(&directory).unwrap();
+        let latest = directory.join("latest.json");
+        let archived = directory.join("1787328720134-job.json");
+        write_latest_capture(&latest, "{\"version\":1}
+").unwrap();
+        fs::write(&archived, "{\"version\":1}
+").unwrap();
+
+        remove_latest_capture(&latest).unwrap();
+        assert!(!latest.exists());
+        // Starting over abandons a job; it does not erase the capture it came from.
+        assert!(archived.is_file());
+
+        // Pressing Start over again is not an error.
+        remove_latest_capture(&latest).unwrap();
+
         fs::remove_dir_all(directory).unwrap();
     }
 

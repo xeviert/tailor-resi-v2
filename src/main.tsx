@@ -213,6 +213,14 @@ const PIPELINE_STAGES = [
   ['pdf_fit', 'PDF one-page fit'],
 ] as const;
 
+// Analysis reports two stages, not the seven the document pipeline runs. Showing the full
+// list for an analysis run would claim a DOCX render is pending when nothing of the sort
+// has been asked for.
+const ANALYSIS_STAGES = [
+  ['ats_analysis', 'ATS analysis'],
+  ['evidence_preflight', 'Evidence review'],
+] as const;
+
 const INITIAL_TAILORING_PROGRESS: PipelineProgress[] = [
   {
     stage: 'ats_analysis',
@@ -334,6 +342,16 @@ const progressDetailClass: Record<PipelineProgress['status'], string> = {
 function errorText(reason: unknown) {
   if (typeof reason === 'string') return reason;
   if (reason instanceof Error) return reason.message;
+  // A rejected Tauri command arrives as the serialized `AppError`, `{code, message}`. Without
+  // this branch every backend failure reached the user as raw JSON.
+  if (
+    reason &&
+    typeof reason === 'object' &&
+    typeof (reason as { message?: unknown }).message === 'string'
+  ) {
+    const message = (reason as { message: string }).message.trim();
+    if (message) return message;
+  }
   try {
     return JSON.stringify(reason);
   } catch {
@@ -456,12 +474,36 @@ export function localOutcome({
   };
 }
 
+/** Seconds spent so far, ticking once a second. A silent wait is what reads as a hang. */
+function ElapsedTime({ since }: { since: number }) {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    setNow(Date.now());
+    const timer = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, [since]);
+  const total = Math.max(0, Math.floor((now - since) / 1000));
+  const minutes = Math.floor(total / 60);
+  const seconds = total % 60;
+  return (
+    <span data-testid='elapsed-time'>{`${minutes}:${String(seconds).padStart(2, '0')}`}</span>
+  );
+}
+
 const ProgressPanel = memo(function ProgressPanel({
   events,
   running,
+  title,
+  stages = PIPELINE_STAGES,
+  startedAt,
+  onCancel,
 }: {
   events: PipelineProgress[];
   running: boolean;
+  title?: string;
+  stages?: readonly (readonly [string, string])[];
+  startedAt?: number | null;
+  onCancel?: () => void;
 }) {
   const latest = events[events.length - 1];
   // One pass over the events instead of a reversed copy per stage; `events` grows for
@@ -478,21 +520,42 @@ const ProgressPanel = memo(function ProgressPanel({
           <p className={eyebrowClass}>PIPELINE ACTIVITY</p>
           <h2 className='m-0 text-[22px] font-bold'>
             {running
-              ? 'Building your tailored resume'
+              ? (title ?? 'Building your tailored resume')
               : latest?.status === 'failed'
                 ? 'Pipeline stopped'
                 : 'Pipeline activity'}
           </h2>
         </div>
         {running && (
-          <span
-            className='h-[22px] w-[22px] rounded-full border-[3px] border-[#cfe0d4] border-t-[#176a46] animate-[progress-spin_0.8s_linear_infinite]'
-            aria-label='Pipeline running'
-          />
+          <div className='flex flex-none items-center gap-3'>
+            {typeof startedAt === 'number' && (
+              <span className='text-[13px] tabular-nums text-[#627067]'>
+                <ElapsedTime since={startedAt} />
+              </span>
+            )}
+            <span
+              className='h-[22px] w-[22px] rounded-full border-[3px] border-[#cfe0d4] border-t-[#176a46] animate-[progress-spin_0.8s_linear_infinite]'
+              aria-label='Pipeline running'
+            />
+            {onCancel && (
+              <button
+                className={secondaryButtonClass}
+                data-testid='cancel-run'
+                onClick={onCancel}
+                type='button'
+              >
+                Cancel
+              </button>
+            )}
+          </div>
         )}
       </div>
-      <ol className='mt-[22px] mb-4 grid list-none grid-cols-7 gap-2 p-0 max-[820px]:grid-cols-2 max-[820px]:gap-3 max-[480px]:grid-cols-1'>
-        {PIPELINE_STAGES.map(([stage, label]) => {
+      <ol
+        className={`mt-[22px] mb-4 grid list-none gap-2 p-0 max-[820px]:grid-cols-2 max-[820px]:gap-3 max-[480px]:grid-cols-1 ${
+          stages.length > 4 ? 'grid-cols-7' : 'grid-cols-2'
+        }`}
+      >
+        {stages.map(([stage, label]) => {
           const status = statusByStage.get(stage) ?? 'pending';
           return (
             <li
@@ -1422,6 +1485,8 @@ function FocusedPipeline({
   events,
   running,
   onBack,
+  startedAt,
+  onCancel,
 }: {
   job: Record<string, unknown>;
   language: Language;
@@ -1429,6 +1494,8 @@ function FocusedPipeline({
   events: PipelineProgress[];
   running: boolean;
   onBack: () => void;
+  startedAt?: number | null;
+  onCancel?: () => void;
 }) {
   const latest = events[events.length - 1];
   const stopped = !running && latest?.status === 'failed';
@@ -1446,7 +1513,12 @@ function FocusedPipeline({
           emphasis
         </p>
       </section>
-      <ProgressPanel events={events} running={running} />
+      <ProgressPanel
+        events={events}
+        running={running}
+        startedAt={startedAt}
+        onCancel={onCancel}
+      />
       {stopped && (
         <div className='mt-4'>
           <button className={secondaryButtonClass} onClick={onBack}>
@@ -1481,6 +1553,10 @@ export function App() {
   );
   const [proofs, setProofs] = useState<Record<string, string>>({});
   const [bank, setBank] = useState<EvidenceBank | null>(null);
+  // When the in-flight run started, so the pipeline panel can show elapsed time. Null
+  // whenever nothing is running.
+  const [runStartedAt, setRunStartedAt] = useState<number | null>(null);
+  const [confirmingStartOver, setConfirmingStartOver] = useState(false);
   const summaryRef = useRef<HTMLDivElement | null>(null);
   const pipelineRef = useRef<HTMLDivElement | null>(null);
   const captureRef = useRef<CapturedJob | null>(null);
@@ -1490,6 +1566,11 @@ export function App() {
   // arrive from three sources with no ordering guarantee. Comparing capture id and language
   // alone cannot tell a current result from one belonging to an earlier run of the same job.
   const runIdRef = useRef(0);
+  // Set by Cancel and cleared by the next deliberate run. The command path already rejects
+  // a stale payload by run id, but the backend's own `resume-pipeline-result` event carries
+  // no run id, so without this an abandoned analysis would still repaint the screen minutes
+  // later. Progress events are gated the same way.
+  const abandonedRef = useRef(false);
   // Mirrors `preflight` for callbacks created in the mount effect, whose closure would
   // otherwise capture the initial `null` forever.
   const preflightRef = useRef<PreflightResult | null>(null);
@@ -1582,8 +1663,77 @@ export function App() {
     // goes through here, so this is the one place the back-to-job detour has to be dropped.
     setReviewingJob(false);
     outcomeSignatureRef.current = null;
+    // A deliberate new run supersedes an abandoned one, so events are welcome again.
+    abandonedRef.current = false;
+    setRunStartedAt(Date.now());
     runIdRef.current += 1;
     return runIdRef.current;
+  }
+  /**
+   * Forget the last run.
+   *
+   * A new capture and an explicit Start over differ only in whether a job replaces the old
+   * one, so they share this. Keeping two copies of "drop everything from the previous job"
+   * is how the two drift apart, and a missed field strands stale state on top of a
+   * different posting.
+   */
+  function resetForCapture(next: CapturedJob | null) {
+    beginRun();
+    captureRef.current = next;
+    setCapture(next);
+    if (next) {
+      languageRef.current = detectLanguage(next.parsed);
+      setLanguage(languageRef.current);
+    }
+    setResult(null);
+    setOutcome(null);
+    preflightRef.current = null;
+    setPreflight(null);
+    setPreflightCollapsed(false);
+    setSelectedOmittedTerms(new Set());
+    // `selected` and `proofs` belong to the preflight that was just dropped. They only
+    // survived before because the next applyPreflight happened to overwrite them.
+    setSelected(new Set());
+    setProofs({});
+    setWorkflowPhase('job');
+    setProgressEvents([]);
+    // A new capture supersedes whatever was running; leaving `running` set would keep
+    // the loader and the disabled buttons alive with nothing behind them.
+    setRunning(false);
+    setLanguageChanging(false);
+    setRunStartedAt(null);
+    setConfirmingStartOver(false);
+    setError('');
+  }
+  /**
+   * Stop waiting on a call that is taking too long to sit through.
+   *
+   * This abandons the wait, not the work: the Rust future and its HTTP request run to
+   * completion and the tokens are already spent. What it buys is a usable window and a
+   * guarantee that the abandoned run cannot write to the screen later.
+   */
+  function cancelRun() {
+    console.info('[ui-result] run abandoned by the user');
+    abandonedRef.current = true;
+    runIdRef.current += 1;
+    setRunning(false);
+    setLanguageChanging(false);
+    setWorkflowPhase('job');
+    setProgressEvents([]);
+    setRunStartedAt(null);
+    setError(
+      'Stopped waiting. The request may still finish in the background - run it again if you need the result.',
+    );
+  }
+  async function startOver() {
+    setConfirmingStartOver(false);
+    try {
+      await invoke('clear_latest_job');
+      resetForCapture(null);
+    } catch (reason) {
+      console.error('[ui-result] start over failed', reason);
+      setError(errorText(reason));
+    }
   }
   async function recoverResultFor(
     captured: CapturedJob,
@@ -1758,29 +1908,14 @@ export function App() {
         });
         return;
       }
-      beginRun();
-      captureRef.current = event.payload;
-      setCapture(event.payload);
-      languageRef.current = detectLanguage(event.payload.parsed);
-      setLanguage(languageRef.current);
-      setResult(null);
-      setOutcome(null);
-      preflightRef.current = null;
-      setPreflight(null);
-      setPreflightCollapsed(false);
-      setSelectedOmittedTerms(new Set());
-      setWorkflowPhase('job');
-      setProgressEvents([]);
-      // A new capture supersedes whatever was running; leaving `running` set would keep
-      // the loader and the disabled buttons alive with nothing behind them.
-      setRunning(false);
-      setError('');
+      resetForCapture(event.payload);
     })
       .then((cleanup) => {
         unlisten = cleanup;
       })
       .catch((reason) => setError(errorText(reason)));
     void listen<PipelineProgress>('resume-pipeline-progress', (event) => {
+      if (abandonedRef.current) return;
       setProgressEvents((current) => [...current, event.payload]);
     })
       .then((cleanup) => {
@@ -1789,6 +1924,12 @@ export function App() {
       .catch((reason) => setError(errorText(reason)));
     void listen<StoredPipelineResult>('resume-pipeline-result', (event) => {
       const stored = event.payload;
+      if (abandonedRef.current) {
+        console.info('[ui-result] ignoring result from an abandoned run', {
+          captureId: stored.capture_received_at_ms,
+        });
+        return;
+      }
       console.info('[ui-result] result event received', {
         captureId: stored.capture_received_at_ms,
         language: stored.language,
@@ -1823,6 +1964,11 @@ export function App() {
   // [outcome] effect smooth-scrolled to the summary on every result write, so the two
   // fought each other several times per run. `outcome` now changes at most once per run
   // because acceptResult drops duplicate payloads.
+  // An armed confirm must not survive the screen it was armed on, or a later click lands on
+  // a Start over the user set up for something else.
+  useEffect(() => {
+    setConfirmingStartOver(false);
+  }, [screen]);
   useEffect(() => {
     const element =
       screen === 'pipeline' ? pipelineRef.current : summaryRef.current;
@@ -1925,6 +2071,7 @@ export function App() {
       }
     } finally {
       setRunning(false);
+      setRunStartedAt(null);
     }
   }
   async function generate() {
@@ -2033,6 +2180,7 @@ export function App() {
       }
     } finally {
       setRunning(false);
+      setRunStartedAt(null);
     }
   }
   async function retailorSelectedTerms() {
@@ -2107,6 +2255,7 @@ export function App() {
       setWorkflowPhase('job');
     } finally {
       setRunning(false);
+      setRunStartedAt(null);
     }
   }
   async function action(
@@ -2191,6 +2340,7 @@ export function App() {
       setError(`Output language could not be changed: ${errorText(reason)}`);
     } finally {
       setLanguageChanging(false);
+      setRunStartedAt(null);
     }
   }
   return (
@@ -2247,6 +2397,39 @@ export function App() {
             >
               Back to captured job
             </button>
+            {confirmingStartOver ? (
+                  <>
+                    <span className='self-center text-[13px] text-[#627067]'>
+                      Discard this job?
+                    </span>
+                    <button
+                      className={secondaryButtonClass}
+                      data-testid='confirm-start-over'
+                      disabled={running || languageChanging}
+                      onClick={() => void startOver()}
+                      type='button'
+                    >
+                      Start over
+                    </button>
+                    <button
+                      className={secondaryButtonClass}
+                      onClick={() => setConfirmingStartOver(false)}
+                      type='button'
+                    >
+                      Keep
+                    </button>
+                  </>
+                ) : (
+                  <button
+                    className={secondaryButtonClass}
+                    data-testid='start-over'
+                    disabled={running || languageChanging}
+                    onClick={() => setConfirmingStartOver(true)}
+                    type='button'
+                  >
+                    Start over
+                  </button>
+                )}
           </div>
           {progressEvents.length > 0 && (
             <details className={compactPanelClass}>
@@ -2269,6 +2452,8 @@ export function App() {
             bulletKeywordEmphasis={bulletKeywordEmphasis}
             events={progressEvents}
             running={running}
+            startedAt={runStartedAt}
+            onCancel={cancelRun}
             onBack={() => {
               setWorkflowPhase('job');
               setProgressEvents([]);
@@ -2418,6 +2603,41 @@ export function App() {
                   Back to tailored result
                 </button>
               )}
+              <div className='flex flex-wrap items-center justify-center gap-2.5 self-center'>
+                {confirmingStartOver ? (
+                  <>
+                    <span className='text-[13px] text-[#627067]'>
+                      Discard this job?
+                    </span>
+                    <button
+                      className={secondaryButtonClass}
+                      data-testid='confirm-start-over'
+                      disabled={running || languageChanging}
+                      onClick={() => void startOver()}
+                      type='button'
+                    >
+                      Start over
+                    </button>
+                    <button
+                      className={secondaryButtonClass}
+                      onClick={() => setConfirmingStartOver(false)}
+                      type='button'
+                    >
+                      Keep
+                    </button>
+                  </>
+                ) : (
+                  <button
+                    className={secondaryButtonClass}
+                    data-testid='start-over'
+                    disabled={running || languageChanging}
+                    onClick={() => setConfirmingStartOver(true)}
+                    type='button'
+                  >
+                    Start over
+                  </button>
+                )}
+              </div>
             </div>
           </section>
           {preflight &&
@@ -2445,7 +2665,14 @@ export function App() {
               />
             ))}
           {progressEvents.length > 0 && (
-            <ProgressPanel events={progressEvents} running={running} />
+            <ProgressPanel
+              events={progressEvents}
+              running={running}
+              title='Analyzing the job post'
+              stages={ANALYSIS_STAGES}
+              startedAt={runStartedAt}
+              onCancel={cancelRun}
+            />
           )}
         </>
       )}

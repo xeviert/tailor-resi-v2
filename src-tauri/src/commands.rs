@@ -7,7 +7,10 @@ use crate::{
         save_selected_evidence, EvidenceBank, EvidenceEntry, PreflightItem, SelectedEvidence,
     },
     job_import::{import_from_text, import_from_url, ImportedJob},
-    server::{load_latest_capture, persist_capture, CapturedJob},
+    server::{
+        capture_directory, load_latest_capture, persist_capture, remove_latest_capture,
+        CapturedJob,
+    },
     tailoring::{
         content_changes, failed_response, load_base_resume, publish_variant_artifact,
         tailor_and_render_with_progress, workspace_root, ArtifactProvenance, BulletKeywordEmphasis,
@@ -29,7 +32,7 @@ pub fn ping() -> Result<String, AppError> {
     Ok("pong".to_string())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn get_latest_job() -> Result<Option<CapturedJob>, AppError> {
     let capture = load_latest_capture().map_err(AppError::Message)?;
     if let Some(captured) = capture.as_ref() {
@@ -52,7 +55,22 @@ pub fn get_latest_job() -> Result<Option<CapturedJob>, AppError> {
     Ok(capture)
 }
 
-#[tauri::command]
+/// Forget the job on screen so the app returns to the empty import screen.
+///
+/// Only the `latest.json` pointer is removed. The timestamped capture it was copied from
+/// stays in `data/job-captures/`, and every variant and result snapshot the job produced
+/// stays where it was written - starting over abandons a job, it does not erase its history.
+#[tauri::command(async)]
+pub fn clear_latest_job() -> Result<(), AppError> {
+    let path = capture_directory()
+        .map_err(AppError::Message)?
+        .join("latest.json");
+    remove_latest_capture(&path).map_err(AppError::Message)?;
+    eprintln!("[capture] cleared latest capture at {}", path.display());
+    Ok(())
+}
+
+#[tauri::command(async)]
 pub fn get_latest_pipeline_result(
     language: String,
     capture_id: u64,
@@ -95,7 +113,7 @@ pub fn get_latest_pipeline_result(
     recover_pipeline_result(&root, capture_id, &language)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn get_latest_pipeline_result_any_language(
     capture_id: u64,
 ) -> Result<Option<StoredPipelineResult>, AppError> {
@@ -403,9 +421,15 @@ fn finish_import(app: &AppHandle, imported: ImportedJob) -> Result<CapturedJob, 
         captured.received_at_ms,
         imported.extraction.label()
     );
-    if let Err(error) = app.emit("job-data-received", &captured) {
+    // The event is the only thing that reaches the UI - the panel deliberately ignores the
+    // capture returned here. Swallowing an emit failure would leave the job on disk and the
+    // window still showing the previous one, with nothing to say why.
+    app.emit("job-data-received", &captured).map_err(|error| {
         eprintln!("[job-import] Failed to emit capture event: {error}");
-    }
+        AppError::Message(format!(
+            "The job was imported but the app could not display it ({error}). Restart the desktop app to load it."
+        ))
+    })?;
     Ok(captured)
 }
 
@@ -414,6 +438,15 @@ pub async fn analyze_latest_job(
     app: AppHandle,
     language: String,
 ) -> Result<PreflightResult, AppError> {
+    // Analysis used to run silently: the review screen only mounts its progress panel once
+    // an event has arrived, so a call that can legitimately take minutes showed nothing but
+    // a button reading "Working...". Reporting the same two stages the failure summaries
+    // already name means the panel has something to draw from the first second.
+    let reporter = |event: PipelineProgress| {
+        if let Err(error) = app.emit("resume-pipeline-progress", event) {
+            eprintln!("[analysis] Failed to emit progress event: {error}");
+        }
+    };
     let captured = load_latest_capture()
         .map_err(AppError::Message)?
         .ok_or_else(|| {
@@ -422,10 +455,24 @@ pub async fn analyze_latest_job(
     let root = workspace_root().map_err(|error| AppError::Message(error.to_string()))?;
     let capture_id = u64::try_from(captured.received_at_ms)
         .map_err(|_| AppError::Message("Capture timestamp is out of range.".to_string()))?;
+    reporter(PipelineProgress {
+        stage: "ats_analysis",
+        status: "started",
+        message: "AI is analyzing ATS keywords, requirements, and role signals.".to_string(),
+        attempt: None,
+        total_attempts: None,
+    });
     let config = match AnalysisConfig::from_env() {
         Some(config) => config,
         None => {
             let message = "OPENAI_API_KEY is required to analyze a resume.".to_string();
+            reporter(PipelineProgress {
+                stage: "ats_analysis",
+                status: "failed",
+                message: message.clone(),
+                attempt: None,
+                total_attempts: None,
+            });
             store_and_emit_outcome(
                 &app,
                 &root,
@@ -445,6 +492,13 @@ pub async fn analyze_latest_job(
         Ok(analysis) => analysis,
         Err(error) => {
             let message = error.to_string();
+            reporter(PipelineProgress {
+                stage: "ats_analysis",
+                status: "failed",
+                message: message.clone(),
+                attempt: None,
+                total_attempts: None,
+            });
             store_and_emit_outcome(
                 &app,
                 &root,
@@ -460,10 +514,32 @@ pub async fn analyze_latest_job(
             return Err(AppError::Message(message));
         }
     };
+    reporter(PipelineProgress {
+        stage: "ats_analysis",
+        status: "completed",
+        message: "ATS analysis completed.".to_string(),
+        attempt: None,
+        total_attempts: None,
+    });
+    reporter(PipelineProgress {
+        stage: "evidence_preflight",
+        status: "started",
+        message: "Matching analyzed terms against the base resume and evidence bank."
+            .to_string(),
+        attempt: None,
+        total_attempts: None,
+    });
     let result = match prepare_preflight_result(&root, &language, analysis.clone()) {
         Ok(result) => result,
         Err(error) => {
             let message = error.to_string();
+            reporter(PipelineProgress {
+                stage: "evidence_preflight",
+                status: "failed",
+                message: message.clone(),
+                attempt: None,
+                total_attempts: None,
+            });
             store_and_emit_outcome(
                 &app,
                 &root,
@@ -479,6 +555,13 @@ pub async fn analyze_latest_job(
             return Err(AppError::Message(message));
         }
     };
+    reporter(PipelineProgress {
+        stage: "evidence_preflight",
+        status: "completed",
+        message: "Evidence resolved.".to_string(),
+        attempt: None,
+        total_attempts: None,
+    });
     store_and_emit_outcome(
         &app,
         &root,
@@ -494,7 +577,7 @@ pub async fn analyze_latest_job(
     Ok(result)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn prepare_evidence_preflight(
     app: AppHandle,
     language: String,
@@ -864,7 +947,7 @@ pub struct UiResultDiagnostic {
     pub rect_bottom: Option<f64>,
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn record_ui_result_state(diagnostic: UiResultDiagnostic) -> Result<(), AppError> {
     if !matches!(diagnostic.language.as_str(), "en" | "fr") {
         return Err(AppError::Message("Language must be en or fr.".to_string()));

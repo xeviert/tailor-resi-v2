@@ -703,3 +703,203 @@ describe('importing a job by hand', () => {
     ).toHaveLength(0);
   });
 });
+
+describe('starting over on a new job', () => {
+  function storedFor(captureId: number) {
+    return {
+      schema_version: 1,
+      capture_received_at_ms: captureId,
+      language: 'en',
+      recovered_from_artifacts: false,
+      status: 'completed',
+      summary: analysis.summary,
+      failed_stage: null,
+      error: null,
+      analysis,
+      resume: completedResume(),
+    };
+  }
+
+  async function reachCompletion() {
+    // The shared mock leaves tailoring pending on purpose; this suite needs it to finish.
+    mocks.invoke.mockImplementation((command: string) => {
+      switch (command) {
+        case 'get_latest_job':
+          return Promise.resolve(captured);
+        case 'get_evidence_bank':
+          return Promise.resolve({ version: 1, entries: [] });
+        case 'analyze_latest_job':
+        case 'prepare_evidence_preflight':
+          return Promise.resolve(preflight);
+        case 'generate_tailored_resume':
+          return Promise.resolve(completedResume());
+        default:
+          return Promise.resolve(null);
+      }
+    });
+    render(<App />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Analyze job' }));
+    fireEvent.click(
+      await screen.findByRole('button', { name: 'Generate tailored PDF' }),
+    );
+    await emit('resume-pipeline-result', storedFor(42));
+    return screen.findByTestId('completion-screen');
+  }
+
+  // Clearing the capture pointer is what makes the reset survive a restart, and it is
+  // also unrecoverable from the UI - so it must not be one click deep.
+  it('asks for confirmation before discarding the finished job', async () => {
+    expect(await reachCompletion()).toBeVisible();
+
+    fireEvent.click(screen.getByTestId('start-over'));
+
+    expect(screen.getByText('Discard this job?')).toBeVisible();
+    expect(
+      mocks.invoke.mock.calls.filter(([command]) => command === 'clear_latest_job'),
+    ).toHaveLength(0);
+    expect(screen.getByTestId('completion-screen')).toBeVisible();
+  });
+
+  it('keeps the result when the confirmation is declined', async () => {
+    expect(await reachCompletion()).toBeVisible();
+
+    fireEvent.click(screen.getByTestId('start-over'));
+    fireEvent.click(screen.getByRole('button', { name: 'Keep' }));
+
+    expect(screen.queryByText('Discard this job?')).not.toBeInTheDocument();
+    expect(screen.getByTestId('completion-screen')).toBeVisible();
+  });
+
+  it('clears the capture and returns to the empty import screen', async () => {
+    expect(await reachCompletion()).toBeVisible();
+
+    fireEvent.click(screen.getByTestId('start-over'));
+    fireEvent.click(screen.getByTestId('confirm-start-over'));
+
+    await waitFor(() =>
+      expect(mocks.invoke).toHaveBeenCalledWith('clear_latest_job'),
+    );
+    await waitFor(() =>
+      expect(screen.queryByTestId('completion-screen')).not.toBeInTheDocument(),
+    );
+    expect(screen.getByText('Capture a job post to begin')).toBeVisible();
+    expect(screen.getByTestId('import-job-panel')).toBeVisible();
+    // The summary band lives above every screen, so a stale one would survive the reset.
+    expect(screen.queryByText(analysis.summary)).not.toBeInTheDocument();
+    expect(screen.getByText('Waiting for capture')).toBeVisible();
+  });
+
+  it('keeps the job on screen when clearing it fails', async () => {
+    expect(await reachCompletion()).toBeVisible();
+    mocks.invoke.mockImplementation((command: string) =>
+      command === 'clear_latest_job'
+        ? Promise.reject({ code: 'Message', message: 'latest.json is read-only.' })
+        : Promise.resolve(null),
+    );
+
+    fireEvent.click(screen.getByTestId('start-over'));
+    fireEvent.click(screen.getByTestId('confirm-start-over'));
+
+    // An AppError is an object, not an Error; it used to reach the user as raw JSON.
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'latest.json is read-only.',
+    );
+    expect(screen.getByTestId('completion-screen')).toBeVisible();
+  });
+});
+
+describe('waiting on the analysis layer', () => {
+  it('shows analysis progress and elapsed time instead of a bare Working button', async () => {
+    mocks.invoke.mockImplementation((command: string) => {
+      switch (command) {
+        case 'get_latest_job':
+          return Promise.resolve(captured);
+        case 'get_evidence_bank':
+          return Promise.resolve({ version: 1, entries: [] });
+        // Never resolves: this is the wait the user reported as stuck.
+        case 'analyze_latest_job':
+          return new Promise(() => undefined);
+        default:
+          return Promise.resolve(null);
+      }
+    });
+    render(<App />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Analyze job' }));
+
+    await emit('resume-pipeline-progress', {
+      stage: 'ats_analysis',
+      status: 'started',
+      message: 'AI is analyzing ATS keywords, requirements, and role signals.',
+      attempt: null,
+      total_attempts: null,
+    });
+
+    expect(screen.getByText('Analyzing the job post')).toBeVisible();
+    expect(screen.getByTestId('pipeline-stage-ats_analysis')).toHaveAttribute(
+      'data-status',
+      'started',
+    );
+    // The document stages belong to tailoring; claiming them here would be a lie.
+    expect(screen.queryByTestId('pipeline-stage-docx_render')).not.toBeInTheDocument();
+    expect(screen.getByTestId('elapsed-time')).toBeVisible();
+    expect(screen.getByTestId('cancel-run')).toBeVisible();
+  });
+
+  it('cancels a run and ignores the result it eventually reports', async () => {
+    mocks.invoke.mockImplementation((command: string) => {
+      switch (command) {
+        case 'get_latest_job':
+          return Promise.resolve(captured);
+        case 'get_evidence_bank':
+          return Promise.resolve({ version: 1, entries: [] });
+        case 'analyze_latest_job':
+          return new Promise(() => undefined);
+        default:
+          return Promise.resolve(null);
+      }
+    });
+    render(<App />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Analyze job' }));
+    await emit('resume-pipeline-progress', {
+      stage: 'ats_analysis',
+      status: 'started',
+      message: 'Working on it.',
+      attempt: null,
+      total_attempts: null,
+    });
+
+    fireEvent.click(screen.getByTestId('cancel-run'));
+
+    expect(await screen.findByRole('button', { name: 'Analyze job' })).toBeEnabled();
+    expect(screen.getByRole('alert')).toHaveTextContent('Stopped waiting');
+
+    // The abandoned run finishes anyway. It must not repaint the screen minutes later.
+    await emit('resume-pipeline-result', {
+      schema_version: 1,
+      capture_received_at_ms: 42,
+      language: 'en',
+      recovered_from_artifacts: false,
+      status: 'analysis_ready',
+      summary: analysis.summary,
+      failed_stage: null,
+      error: null,
+      analysis,
+      resume: null,
+    });
+    expect(screen.queryByText(analysis.summary)).not.toBeInTheDocument();
+
+    // A deliberate re-run re-opens the door.
+    fireEvent.click(screen.getByRole('button', { name: 'Analyze job' }));
+    await emit('resume-pipeline-progress', {
+      stage: 'ats_analysis',
+      status: 'started',
+      message: 'Working on it.',
+      attempt: null,
+      total_attempts: null,
+    });
+    expect(screen.getByTestId('pipeline-stage-ats_analysis')).toHaveAttribute(
+      'data-status',
+      'started',
+    );
+  });
+});

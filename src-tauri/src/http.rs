@@ -19,8 +19,15 @@ pub fn shared_client() -> &'static reqwest::Client {
             .connect_timeout(CONNECT_TIMEOUT)
             .build()
             .unwrap_or_else(|error| {
+                // The fallback has to carry the same budget. A bare `Client::new()` has no
+                // timeout at all, so a builder failure would quietly turn every OpenAI call
+                // in the app into an unbounded wait - the exact wedge the timeout prevents.
                 eprintln!("[http] Falling back to a default client: {error}");
-                reqwest::Client::new()
+                reqwest::Client::builder()
+                    .timeout(REQUEST_TIMEOUT)
+                    .connect_timeout(CONNECT_TIMEOUT)
+                    .build()
+                    .expect("a client with only timeouts set must build")
             })
     })
 }

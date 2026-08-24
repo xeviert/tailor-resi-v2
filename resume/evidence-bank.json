@@ -1125,7 +1125,7 @@
     },
     {
       "term": "Third-party API integrations",
-      "kind": "method_domain",
+      "kind": "responsibility",
       "user_attested": true,
       "allow_model_role_placement": false
     },
@@ -1504,7 +1504,7 @@
     },
     {
       "term": "Front-end engineering",
-      "kind": "technology",
+      "kind": "method_domain",
       "user_attested": true,
       "allow_model_role_placement": false
     },
@@ -2530,6 +2530,114 @@
     },
     {
       "term": "Travail frontend epic-level de bout en bout",
+      "kind": "technology",
+      "user_attested": true,
+      "allow_model_role_placement": false
+    },
+    {
+      "term": "Collaboration with Design and Product",
+      "kind": "method_domain",
+      "user_attested": true,
+      "allow_model_role_placement": false
+    },
+    {
+      "term": "Component architecture",
+      "kind": "technology",
+      "user_attested": true,
+      "allow_model_role_placement": false
+    },
+    {
+      "term": "Data-fetching patterns",
+      "kind": "technology",
+      "user_attested": true,
+      "allow_model_role_placement": false
+    },
+    {
+      "term": "End-to-end testing",
+      "kind": "method_domain",
+      "user_attested": true,
+      "allow_model_role_placement": false
+    },
+    {
+      "term": "Epic-level frontend work end-to-end",
+      "kind": "technology",
+      "user_attested": true,
+      "allow_model_role_placement": false
+    },
+    {
+      "term": "Integration testing",
+      "kind": "method_domain",
+      "user_attested": true,
+      "allow_model_role_placement": false
+    },
+    {
+      "term": "Keyboard navigation",
+      "kind": "method_domain",
+      "user_attested": true,
+      "allow_model_role_placement": false
+    },
+    {
+      "term": "Large frontend projects",
+      "kind": "responsibility",
+      "user_attested": true,
+      "allow_model_role_placement": false
+    },
+    {
+      "term": "Performance tradeoffs",
+      "kind": "method_domain",
+      "user_attested": true,
+      "allow_model_role_placement": false
+    },
+    {
+      "term": "Remix",
+      "kind": "technology",
+      "user_attested": true,
+      "allow_model_role_placement": false
+    },
+    {
+      "term": "Screen reader compatibility",
+      "kind": "method_domain",
+      "user_attested": true,
+      "allow_model_role_placement": false
+    },
+    {
+      "term": "Semantic HTML",
+      "kind": "technology",
+      "user_attested": true,
+      "allow_model_role_placement": false
+    },
+    {
+      "term": "State management",
+      "kind": "technology",
+      "user_attested": true,
+      "allow_model_role_placement": false
+    },
+    {
+      "term": "Unit testing",
+      "kind": "method_domain",
+      "user_attested": true,
+      "allow_model_role_placement": false
+    },
+    {
+      "term": "WCAG standards",
+      "kind": "method_domain",
+      "user_attested": true,
+      "allow_model_role_placement": false
+    },
+    {
+      "term": "Server-rendered React frameworks",
+      "kind": "technology",
+      "user_attested": true,
+      "allow_model_role_placement": false
+    },
+    {
+      "term": "Shared component library",
+      "kind": "technology",
+      "user_attested": true,
+      "allow_model_role_placement": false
+    },
+    {
+      "term": "Table/grid UI",
       "kind": "technology",
       "user_attested": true,
       "allow_model_role_placement": false
