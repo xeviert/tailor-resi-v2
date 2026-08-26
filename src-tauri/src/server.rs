@@ -1,8 +1,7 @@
 use crate::analysis::{analyze_job, AnalysisConfig, JobAnalysis};
 use crate::commands::{failure_summary, store_and_emit_outcome};
 use crate::tailoring::{
-    failed_response, tailor_and_render, workspace_root, BulletKeywordEmphasis, TailorRequest,
-    TailorResponse,
+    failed_response, tailor_and_render, workspace_root, TailorRequest, TailorResponse,
 };
 use axum::{
     extract::State,
@@ -946,7 +945,6 @@ async fn analyze_handler(
                 analysis: analysis.clone(),
                 approved_evidence: vec![],
                 priority_attested_terms: vec![],
-                bullet_keyword_emphasis: BulletKeywordEmphasis::Balanced,
             };
             match tailor_and_render(request).await {
                 Ok(response) => {

@@ -45,7 +45,6 @@ function completedResume(score = 73, omitted = ['Angular in experience']) {
     validation_status: 'passed',
     fit_status: 'passed',
     page_count: 1,
-    bullet_keyword_emphasis: 'balanced' as const,
     experience_bullets_changed: 3,
     report: {
       estimated_ats_coverage_score: score,
@@ -179,7 +178,8 @@ describe('review-to-tailoring workflow', () => {
     });
   });
 
-  it('defaults to high emphasis and sends max only when the user picks it', async () => {
+  // There is one tailoring mode now, so there is nothing to pick and nothing to send.
+  it('offers no emphasis choice and sends no emphasis field', async () => {
     render(<App />);
     expect(await screen.findByText('Unique captured job description.')).toBeVisible();
     fireEvent.click(screen.getByRole('button', { name: 'Analyze job' }));
@@ -187,21 +187,18 @@ describe('review-to-tailoring workflow', () => {
       await screen.findByRole('button', { name: 'Generate tailored PDF' }),
     ).toBeVisible();
 
-    const emphasis = screen.getByRole('group', {
-      name: 'Experience keyword emphasis',
-    });
-    expect(within(emphasis).getByRole('button', { name: 'high' })).toBeVisible();
-    fireEvent.click(within(emphasis).getByRole('button', { name: 'max' }));
+    expect(
+      screen.queryByRole('group', { name: 'Experience keyword emphasis' }),
+    ).not.toBeInTheDocument();
 
     fireEvent.click(
       screen.getByRole('button', { name: 'Generate tailored PDF' }),
     );
 
-    await waitFor(() =>
-      expect(mocks.invoke).toHaveBeenCalledWith('generate_tailored_resume', {
-        request: expect.objectContaining({ bullet_keyword_emphasis: 'max' }),
-      }),
-    );
+    await waitFor(() => expect(mocks.invoke).toHaveBeenCalledWith(
+      'generate_tailored_resume',
+      { request: expect.not.objectContaining({ bullet_keyword_emphasis: expect.anything() }) },
+    ));
   });
 
   it('keeps a failed pipeline visible until the user returns to review', async () => {

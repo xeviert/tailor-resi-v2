@@ -521,7 +521,7 @@
       "term": "CI/CD",
       "kind": "technology",
       "user_attested": true,
-      "allow_model_role_placement": false
+      "allow_model_role_placement": true
     },
     {
       "term": "Comfort with cloud-native environments",
@@ -671,7 +671,7 @@
       "term": "JavaScript",
       "kind": "technology",
       "user_attested": true,
-      "allow_model_role_placement": false
+      "allow_model_role_placement": true
     },
     {
       "term": "Own quality on your scope",
@@ -2646,13 +2646,13 @@
       "term": "Développement JavaScript",
       "kind": "technology",
       "user_attested": true,
-      "allow_model_role_placement": false
+      "allow_model_role_placement": true
     },
     {
       "term": "Développement client et serveur",
       "kind": "technology",
       "user_attested": true,
-      "allow_model_role_placement": false
+      "allow_model_role_placement": true
     },
     {
       "term": "Expérience professionnelle de plusieurs années",
@@ -2664,13 +2664,13 @@
       "term": "Technologies cloud",
       "kind": "technology",
       "user_attested": true,
-      "allow_model_role_placement": false
+      "allow_model_role_placement": true
     },
     {
       "term": "cloud native",
       "kind": "technology",
       "user_attested": true,
-      "allow_model_role_placement": false
+      "allow_model_role_placement": true
     },
     {
       "term": "implémentation de technologies cloud",
@@ -2682,25 +2682,25 @@
       "term": "low-code",
       "kind": "technology",
       "user_attested": true,
-      "allow_model_role_placement": false
+      "allow_model_role_placement": true
     },
     {
       "term": "plateforme cloud",
       "kind": "technology",
       "user_attested": true,
-      "allow_model_role_placement": false
+      "allow_model_role_placement": true
     },
     {
       "term": "plateforme de test",
       "kind": "technology",
       "user_attested": true,
-      "allow_model_role_placement": false
+      "allow_model_role_placement": true
     },
     {
       "term": "stack client et serveur",
       "kind": "technology",
       "user_attested": true,
-      "allow_model_role_placement": false
+      "allow_model_role_placement": true
     },
     {
       "term": "méthodologie agile",

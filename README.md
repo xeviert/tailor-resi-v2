@@ -129,17 +129,19 @@ must stay out of the resume.
    well-informed as a re-tailor. Unsupported high-value ATS terms remain in the
    report instead of being added to the resume.
 
-   An entry with neither a proof note naming a role or project nor
-   `allow_model_role_placement` can only support a skills string, never an
-   experience bullet. That boundary is what keeps attestation from turning into
-   invention.
+   Attesting to a term is the authorization to use it. A saved entry can support
+   an experience bullet, not only a skills string, and the tailoring layer is told
+   to place it in the most plausible existing role. The boundary that keeps this
+   from becoming invention is the term itself: the attestation covers the named
+   capability and nothing adjacent to it - no metric, employer, title, date, or
+   credential comes along with it.
 
 5. Tailor the resume and run the locked document pipeline.
 
    When the user clicks **Generate tailored PDF**, the UI invokes
    `generate_tailored_resume`. The request includes the selected language, the
-   prior `JobAnalysis`, selected evidence, and the experience keyword emphasis
-   level (`low`, `balanced`, `high`, or `max`).
+   prior `JobAnalysis`, and the selected evidence. There is no emphasis setting:
+   there is one tailoring mode and it is the most aggressive one.
 
    The tailoring layer uses `OPENAI_TAILOR_MODEL` and may rewrite only experience
    bullet text and skills strings. It must preserve metadata, companies, titles,
@@ -147,31 +149,35 @@ must stay out of the resume.
    contact/header layout. The generated resume content is validated before any
    document is treated as usable.
 
-   `max` is the strongest level and a strict superset of `high`. On top of
-   rewriting every bullet, it replaces 1 to 3 of the least job-relevant bullets
-   outright: the original angle is discarded and a new bullet is written against
-   the job's highest-importance signals. Replacements happen in place, so job and
-   bullet counts never change. At most one bullet per role may be replaced, and
-   each replacement must stay grounded in this person's real work in that role -
+   Experience bullets are treated as the primary ATS surface. Every bullet comes
+   back with different, truthful text before any skills string changes, and on top
+   of that the model replaces bullets outright: the original angle is discarded and
+   a new bullet is written against the job's highest-importance signals. There is
+   no cap and no per-role limit - replacing every bullet in the resume is a valid
+   answer to a job the base bullets do not speak to - and at least one replacement
+   is required, so a run cannot pass on rephrasing alone. Replacements happen in
+   place, so job and bullet counts never change.
+
+   Each replacement must stay grounded in this person's real work in that role -
    other base-resume facts, the attested evidence bank, or a responsibility
    directly implied by that role's stated stack, title, and scope. Employers,
    titles, dates, credentials, certifications, education, tools, and metrics
-   remain invention-forbidden at every level. Each swap is recorded in the
-   tailoring report as a `replaced` bullet-rewrite decision with a rationale, and
-   the desktop UI lists the before/after text so the user can review what changed.
+   remain invention-forbidden. Each swap is recorded in the tailoring report as a
+   `replaced` bullet-rewrite decision with a rationale, and the desktop UI lists
+   the before/after text so the user can review what changed.
 
    The pipeline then runs these backend stages:
 
    - `resume_tailoring`: generate truthful tailored resume JSON and a tailoring
      report.
-   - `safety_validation`: verify locked JSON shape and factual constraints; in
-     high- and max-emphasis modes, ensure experience bullets were actually
-     rewritten. Max additionally enforces the 1-3 replacement budget, the
-     one-replacement-per-role limit, and prose sanity checks that reject a
-     keyword-stuffed or overlong replacement. A rejected response is sent back to
-     the model for correction within the attempt limit. Once a response is
-     accepted, this stage measures ATS keyword coverage of the generated content
-     and rebuilds the report's covered/omitted lists from that measurement.
+   - `safety_validation`: verify locked JSON shape and factual constraints, ensure
+     every experience bullet was actually rewritten, and require at least one
+     replacement. Replacements also face length and prose checks that reject a
+     keyword-stuffed, overlong, or too-short bullet, because the DOCX layout is
+     locked to one page. A rejected response is sent back to the model for
+     correction within the attempt limit. Once a response is accepted, this stage
+     measures ATS keyword coverage of the generated content and rebuilds the
+     report's covered/omitted lists from that measurement.
    - `variant_write`: save the job-specific variant under `resume/variants/`.
    - `docx_render`: render the locked-layout DOCX using the existing resume
      PowerShell pipeline.
@@ -191,9 +197,9 @@ must stay out of the resume.
    the rendered DOCX, and usually a one-page PDF.
 
    The summary is headed by the job it belongs to - the captured title, the company,
-   the output language, the emphasis level that produced it, and a link back to the
-   original post. None of that is stored in the result; it comes from the capture on
-   screen, which every recovery path already pins to the same `capture_received_at_ms`.
+   the output language, and a link back to the original post. None of that is stored
+   in the result; it comes from the capture on screen, which every recovery path
+   already pins to the same `capture_received_at_ms`.
 
    Stepping back to the captured job keeps the finished result in memory. The review
    screen then offers **Back to tailored result** to reopen the completed summary
@@ -224,9 +230,16 @@ must stay out of the resume.
 
    Re-tailoring loads the previous source variant and analysis, validates that the
    selected terms came from the source result's omitted list, records them as
-   user-attested placement terms where allowed, and reruns the same tailoring and
-   document pipeline. The result records the source variant, previous score, and
-   selected terms so the UI can show the score delta.
+   user-attested placement terms, and reruns the same tailoring and document
+   pipeline. The result records the source variant, previous score, and selected
+   terms so the UI can show the score delta.
+
+   Placement is checked against each bullet on its own, not against all of them
+   joined together. A phrase whose words happen to be scattered one apiece across
+   unrelated bullets is not a claim the resume makes, and counting it as placed is
+   what previously let a selected term be reported as covered while appearing
+   nowhere. When a term genuinely cannot be placed within the attempt limit the run
+   fails and says so, rather than quietly reporting success.
 
 ### ATS Coverage Scoring
 

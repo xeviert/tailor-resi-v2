@@ -18,11 +18,16 @@ Build a local resume-tailoring workflow that captures job posts, analyzes ATS-re
 - Job-specific edits must be written as variants under `resume/variants/`.
 - DOCX layout is locked. Header/contact details, section headings, and education/formation must not change during tailoring.
 - The AI tailoring layer may rewrite only the professional summary, experience bullets, and skills strings unless the user explicitly expands scope.
-- Never add unsupported credentials, tools, employers, metrics, responsibilities, certifications, or education. Unsupported high-value ATS terms belong in a report, not in the resume.
+- Never add unsupported credentials, tools, employers, metrics, certifications, or education. Unsupported high-value ATS terms belong in a report, not in the resume.
 - The ATS score is measured, never reported by a model. `src-tauri/src/ats_score.rs` computes it from the generated document; the model's `estimated_ats_coverage_score` is advisory only and must not be used to drive logic or shown as the headline number.
 - The evidence preflight and the ATS scorer must build their term ledger from the same `evidence::analysis_candidates`. If they diverge, the app asks the user to confirm one set of terms while scoring another.
 - `payload.sourceText` on an imported capture holds the raw page or pasted text for debugging and must never reach a prompt. `prompt_job_view` only ever sees `parsed`, and the import branch of `parse_job_data` never populates `parsed["raw"]`.
-- One deliberate exception: `max` bullet keyword emphasis may state a responsibility directly implied by a role's stated stack, title, and scope, and only inside a bullet it replaces outright. This is intentional - see `BulletKeywordEmphasis::Max` and the `invention_rule` branch in `src-tauri/src/tailoring.rs`. Credentials, tools, employers, metrics, certifications, and education stay invention-forbidden at every level, including `max`.
+- There is one tailoring mode and no emphasis parameter. It rewrites every experience bullet and replaces as many as the job warrants, with no ceiling and no per-role limit; at least one replacement is required. See `BULLET_REWRITE_INSTRUCTION` and `validate_bullet_rewrites` in `src-tauri/src/tailoring.rs`.
+- Two deliberate carve-outs to the invention rule, both narrow:
+  - A responsibility directly implied by a role's stated stack, title, and scope may be stated inside a bullet the run replaces outright, and nowhere else. See `INVENTION_RULE` in `src-tauri/src/tailoring.rs`.
+  - Every `user_attested` entry in `resume/evidence-bank.json` is usable in an experience bullet, not only in a skills string. Attesting is the authorization; a proof note is no longer required for bullet use. The attestation covers the named capability and nothing adjacent to it.
+- Credentials, tools, employers, metrics, certifications, and education stay invention-forbidden regardless.
+- A selected placement term is checked against each bullet on its own. Do not reintroduce a check against all bullets concatenated: it reports a phrase as placed when its words merely appear in different bullets, which silently suppresses the retry. See `placement_term_is_covered_in_any` in `src-tauri/src/evidence.rs`.
 
 ## AI Model Defaults
 

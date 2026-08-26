@@ -16,7 +16,6 @@ import { JobPanel, safeUrl } from './job-panel';
 import './styles.css';
 
 type Language = 'en' | 'fr';
-type BulletKeywordEmphasis = 'low' | 'balanced' | 'high' | 'max';
 type CapturedJob = {
   received_at_ms: number;
   payload: unknown;
@@ -108,7 +107,6 @@ type ResumeResult = {
   validation_status: string;
   fit_status: string;
   page_count: number | null;
-  bullet_keyword_emphasis: BulletKeywordEmphasis;
   experience_bullets_changed: number;
   report: Report | null;
   tailored_content: unknown | null;
@@ -771,7 +769,6 @@ export function RunSummaryPanel({
   const failed = status === 'failed';
   const jobTitle = jobText(job?.title, '');
   const postUrl = safeUrl(job?.url);
-  const emphasis = outcome.resume?.bullet_keyword_emphasis;
   const heading =
     status === 'analysis_ready'
       ? 'ATS analysis ready'
@@ -807,12 +804,6 @@ export function RunSummaryPanel({
             >
               {jobText(job?.company, 'Company not provided')} ·{' '}
               {outcome.language === 'en' ? 'English' : 'French'} resume
-              {emphasis && (
-                <>
-                  {' · '}
-                  <span className='capitalize'>{emphasis}</span> keyword emphasis
-                </>
-              )}
               {postUrl && (
                 <>
                   {' · '}
@@ -1029,8 +1020,7 @@ function UnplacedTerms({ coverage }: { coverage: AtsCoverage }) {
       </p>
       <p className='mt-1.5 mb-3 max-w-[780px] text-[13px] leading-relaxed text-[#627067]'>
         Your base resume or saved evidence already backs these, so no
-        attestation is needed. Re-tailoring, or a higher emphasis level, is what
-        gets them placed.
+        attestation is needed. Re-tailoring is what gets them placed.
       </p>
       <div className='flex flex-wrap gap-2'>
         {unplaced.map((term) => (
@@ -1131,15 +1121,11 @@ export function ResultPanel({
         </h2>
         <p className={mutedClass}>{saveMessage}</p>
         <p className='mt-3.5 mb-0 text-[13px] font-bold capitalize text-[#176a46]'>
-          {resume.experience_bullets_changed} experience bullets{' '}
-          {resume.bullet_keyword_emphasis === 'high' ||
-          resume.bullet_keyword_emphasis === 'max'
-            ? 'rewritten before skills'
-            : 'tailored'}
+          {resume.experience_bullets_changed} experience bullets rewritten
+          before skills
           {replacedBullets.length > 0
             ? `, ${replacedBullets.length} replaced outright`
-            : ''}{' '}
-          - {resume.bullet_keyword_emphasis} emphasis
+            : ''}
         </p>
         {resume.retailor && scoreDelta !== null && (
           <p
@@ -1228,7 +1214,7 @@ export function ResultPanel({
             Replaced bullets ({replacedBullets.length})
           </p>
           <p className='mt-1.5 mb-3 max-w-[780px] text-[13px] leading-relaxed text-[#627067]'>
-            Max emphasis swapped these bullets for new ones aimed at this job.
+            Tailoring swapped these bullets for new ones aimed at this job.
             Read each one before you send the resume - you have to be able to
             stand behind it in an interview.
           </p>
@@ -1481,7 +1467,6 @@ function jobText(value: unknown, fallback: string) {
 function FocusedPipeline({
   job,
   language,
-  bulletKeywordEmphasis,
   events,
   running,
   onBack,
@@ -1490,7 +1475,6 @@ function FocusedPipeline({
 }: {
   job: Record<string, unknown>;
   language: Language;
-  bulletKeywordEmphasis: BulletKeywordEmphasis;
   events: PipelineProgress[];
   running: boolean;
   onBack: () => void;
@@ -1508,9 +1492,7 @@ function FocusedPipeline({
         </h2>
         <p className={mutedClass}>
           {jobText(job.company, 'Company not provided')} ·{' '}
-          {language === 'en' ? 'English' : 'French'} resume ·{' '}
-          <span className='capitalize'>{bulletKeywordEmphasis}</span> keyword
-          emphasis
+          {language === 'en' ? 'English' : 'French'} resume
         </p>
       </section>
       <ProgressPanel
@@ -1534,8 +1516,6 @@ export function App() {
   const [capture, setCapture] = useState<CapturedJob | null>(null);
   const [language, setLanguage] = useState<Language>('en');
   const [languageChanging, setLanguageChanging] = useState(false);
-  const [bulletKeywordEmphasis, setBulletKeywordEmphasis] =
-    useState<BulletKeywordEmphasis>('high');
   const [workflowPhase, setWorkflowPhase] = useState<WorkflowPhase>('job');
   const [running, setRunning] = useState(false);
   const [error, setError] = useState('');
@@ -2101,7 +2081,6 @@ export function App() {
     console.info('[ui-result] tailoring command started', {
       captureId: captureRef.current?.received_at_ms,
       language,
-      bulletKeywordEmphasis,
     });
     try {
       const resume = await invoke<ResumeResult>('generate_tailored_resume', {
@@ -2109,7 +2088,6 @@ export function App() {
           language,
           analysis: preflight.analysis,
           selected_evidence: selectedEvidence,
-          bullet_keyword_emphasis: bulletKeywordEmphasis,
         },
       });
       console.info('[ui-result] tailoring command resolved', {
@@ -2449,7 +2427,6 @@ export function App() {
           <FocusedPipeline
             job={job}
             language={language}
-            bulletKeywordEmphasis={bulletKeywordEmphasis}
             events={progressEvents}
             running={running}
             startedAt={runStartedAt}
@@ -2544,34 +2521,11 @@ export function App() {
               )}
               {preflight && (
                 <div className={fieldGroupClass}>
-                  <span className={fieldLabelClass}>
-                    Experience keyword emphasis
-                  </span>
-                  <div
-                    className={segmentedGroupClass}
-                    role='group'
-                    aria-label='Experience keyword emphasis'
-                  >
-                    {(['high', 'max'] as const).map((level, index) => (
-                      <button
-                        aria-pressed={bulletKeywordEmphasis === level}
-                        className={`${segmentedButtonClass(
-                          bulletKeywordEmphasis === level,
-                          index === 0,
-                        )} capitalize`}
-                        disabled={running || languageChanging}
-                        key={level}
-                        onClick={() => setBulletKeywordEmphasis(level)}
-                        type='button'
-                      >
-                        {level}
-                      </button>
-                    ))}
-                  </div>
+                  <span className={fieldLabelClass}>Experience bullets</span>
                   <small className={fieldHintClass}>
-                    High rewrites every bullet with supported job language. Max
-                    also swaps 1-3 low-relevance bullets for new ones aimed at
-                    this job.
+                    Every bullet is rewritten with supported job language, and
+                    as many as this job warrants are replaced outright with new
+                    ones aimed at it.
                   </small>
                 </div>
               )}

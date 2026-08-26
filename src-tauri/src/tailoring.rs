@@ -3,8 +3,7 @@ use crate::{
     api_usage::record_response_usage,
     ats_score::{covered_and_omitted, load_locked_sections, score_ats_coverage, AtsCoverage},
     evidence::{
-        equivalent_terms, load_evidence_bank, placement_equivalent_terms,
-        placement_term_is_covered, preflight_items, EvidenceEntry,
+        load_evidence_bank, placement_term_is_covered_in_any, preflight_items, EvidenceEntry,
     },
     http::shared_client,
 };
@@ -24,7 +23,6 @@ use std::{
 const MAX_COMPANY_ROLE_SLUG_LEN: usize = 64;
 const MAX_TAILORING_ATTEMPTS: usize = 4;
 const MIN_REPLACED_BULLETS: usize = 1;
-const MAX_REPLACED_BULLETS: usize = 3;
 const MIN_REPLACED_WORDS: usize = 8;
 const MAX_LIST_RUN: usize = 8;
 const MIN_REPLACED_LENGTH_ALLOWANCE: usize = 140;
@@ -142,32 +140,7 @@ pub struct RetailorMetadata {
     pub selected_terms: Vec<String>,
 }
 
-#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum BulletKeywordEmphasis {
-    Low,
-    #[default]
-    Balanced,
-    High,
-    Max,
-}
-
-impl BulletKeywordEmphasis {
-    fn prompt_instruction(self) -> &'static str {
-        match self {
-            Self::Low => "Bullet keyword emphasis is LOW: add supported job language only to the strongest direct bullet matches.\n",
-            Self::Balanced => "Bullet keyword emphasis is BALANCED: before relying on skills-section additions, spread one natural, supported job term or phrase across roughly half of the factually relevant experience bullets.\n",
-            Self::High => "Bullet keyword emphasis is HIGH: experience bullets are the primary ATS surface, not skills. You MUST return every experience bullet with different, truthful text before changing skills. A rewrite counts only when the returned bullet text differs from the input bullet text; never label an unchanged bullet as rewritten. Use natural, supported job language wherever the original bullet supports it. If a bullet has no direct job-term match, still give it an accurate stylistic rephrase that preserves its original facts. In HIGH mode every bullet_rewrite_decision must be rewritten; no_relevant_match is not allowed. A skills-only response is invalid.\n",
-            Self::Max => "Bullet keyword emphasis is MAX: this is HIGH plus targeted bullet replacement. First satisfy every HIGH rule: return every experience bullet with different, truthful text before changing skills, and count a rewrite only when the returned bullet text differs from the input bullet text. Then additionally choose between 1 and 3 of the least job-relevant bullets and REPLACE them outright: discard the original bullet's angle entirely and write a new bullet that targets this job's highest-importance ATS signals. Replace at most one bullet in any single role, so no role is gutted. A replaced bullet must still describe work this same person actually did in that same role during that same period. Ground it in the other facts of the base resume, in the user-attested evidence bank, or in a responsibility directly implied by that role's stated stack, title, and scope. Never introduce a new employer, job title, date, credential, certification, or degree, never invent a metric, and never move an existing metric onto work it did not measure. Write natural professional prose: each replaced bullet must read as one specific accomplishment or responsibility with a concrete object and outcome, not a list of technologies. Keyword stuffing is a failure. Keep each replaced bullet close to the length of the bullet it replaced so the locked DOCX layout stays stable. Mark every replaced bullet with outcome \"replaced\" and give a rationale naming both the job signal it now targets and the grounding it relies on. Every other bullet uses outcome \"rewritten\"; no_relevant_match is not allowed. If you replace a bullet to make room for a user-attested claim, that replacement counts toward the limit of 3. A skills-only response is invalid.\n",
-        }
-    }
-}
-
-fn normalize_bullet_rewrite_decisions(
-    base: &serde_json::Value,
-    tailored: &mut TailoredResume,
-    emphasis: BulletKeywordEmphasis,
-) {
+fn normalize_bullet_rewrite_decisions(base: &serde_json::Value, tailored: &mut TailoredResume) {
     let supplied_outcomes = tailored
         .report
         .bullet_rewrite_decisions
@@ -214,9 +187,8 @@ fn normalize_bullet_rewrite_decisions(
             )
             .enumerate()
         {
-            let claimed_replacement = emphasis == BulletKeywordEmphasis::Max
-                && supplied_outcomes.get(&(experience_index, bullet_index))
-                    == Some(&BulletRewriteOutcome::Replaced);
+            let claimed_replacement = supplied_outcomes.get(&(experience_index, bullet_index))
+                == Some(&BulletRewriteOutcome::Replaced);
             let outcome = if before == after {
                 BulletRewriteOutcome::NoRelevantMatch
             } else if claimed_replacement {
@@ -294,8 +266,6 @@ pub struct TailorRequest {
     pub approved_evidence: Vec<EvidenceEntry>,
     #[serde(default)]
     pub priority_attested_terms: Vec<String>,
-    #[serde(default)]
-    pub bullet_keyword_emphasis: BulletKeywordEmphasis,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -318,7 +288,6 @@ pub struct TailorResponse {
     pub validation_status: &'static str,
     pub fit_status: &'static str,
     pub page_count: Option<u32>,
-    pub bullet_keyword_emphasis: BulletKeywordEmphasis,
     pub experience_bullets_changed: u32,
     pub report: Option<TailoringReport>,
     pub tailored_content: Option<serde_json::Value>,
@@ -395,6 +364,17 @@ pub enum TailoringError {
     Fit(String),
 }
 
+/// The one tailoring mode's bullet rules.
+///
+/// There is deliberately no replacement ceiling. The old budget of three, one per role, left
+/// most of the resume speaking to whatever the previous job wanted, so a posting the base
+/// bullets did not address could not be reached however much evidence backed it.
+const BULLET_REWRITE_INSTRUCTION: &str = "Experience bullets are the primary ATS surface, not skills. You MUST return every experience bullet with different, truthful text before changing skills; a rewrite counts only when the returned bullet text differs from the input bullet text, and unchanged text must never be labelled as rewritten.\nBeyond rephrasing, REPLACE outright as many bullets as it takes to cover this job's highest-weighted signals. There is no cap and no per-role limit: replace every bullet in the resume if that is what the job calls for, and replace at least one. A bullet whose original angle does not serve this job should be discarded rather than reworded - drop its subject entirely and write a new bullet aimed at the job's strongest ATS signals.\nA replaced bullet must still describe work this same person actually did in that same role during that same period. Ground it in the other facts of the base resume, in the user-attested evidence bank, or in a responsibility directly implied by that role's stated stack, title, and scope. Never introduce a new employer, job title, date, credential, certification, or degree, never invent a metric, and never move an existing metric onto work it did not measure.\nWrite natural professional prose: each replaced bullet must read as one specific accomplishment or responsibility with a concrete object and outcome, not a list of technologies. Keyword stuffing is a failure. Keep each replaced bullet close to the length of the bullet it replaced so the locked DOCX layout stays stable.\nMark every replaced bullet with outcome \"replaced\" and give a rationale naming both the job signal it now targets and the grounding it relies on. Every other bullet uses outcome \"rewritten\"; no_relevant_match is not allowed. A skills-only response is invalid.\n";
+
+/// Mirrors the replacement licence above: a responsibility implied by a role's own stack, title,
+/// and scope is fair game inside a bullet this run replaces outright, and nowhere else.
+const INVENTION_RULE: &str = "Do not invent credentials, employers, tools, metrics, education, certifications, or experience. Inside a replaced bullet only, you may state a responsibility that is directly implied by that role's stated stack, title, and scope even without an explicit evidence entry; never one a person in that role would not routinely own.\n";
+
 /// Builds the tailoring user message.
 ///
 /// Ordering here is about cost, not just readability. Everything above the data payloads is
@@ -409,7 +389,6 @@ pub fn build_tailoring_prompt(
     base_resume: &serde_json::Value,
     approved_evidence: &[EvidenceEntry],
     priority_attested_terms: &[String],
-    bullet_keyword_emphasis: BulletKeywordEmphasis,
     concise: bool,
     correction_instruction: Option<&str>,
 ) -> String {
@@ -441,12 +420,6 @@ pub fn build_tailoring_prompt(
         String::new()
     };
 
-    let invention_rule = if bullet_keyword_emphasis == BulletKeywordEmphasis::Max {
-        "Do not invent credentials, employers, tools, metrics, education, certifications, or experience. Inside a replaced bullet only, you may state a responsibility that is directly implied by that role's stated stack, title, and scope even without an explicit evidence entry; never one a person in that role would not routinely own.\n"
-    } else {
-        "Do not invent credentials, employers, tools, metrics, responsibilities, education, certifications, or experience.\n"
-    };
-
     format!(
         "Tailor this {language} resume JSON for maximum truthful ATS alignment.\n\
          Return only JSON matching the schema. Preserve the input resume shape exactly.\n\
@@ -454,10 +427,10 @@ pub fn build_tailoring_prompt(
          Do not change meta, company names, locations, titles, dates, job order, number of jobs, number of bullets, or skill keys.\n\
          Aggressively incorporate ATS keywords, tools, responsibility phrases, and domain wording when the base resume supports them.\n\
          Applicant tracking systems match literal strings, so write each supported term the way this job post writes it. The analysis term_variants list gives the alternate written forms; when an acronym and its expansion are both in common use, name both once in the skills line where it reads naturally, and use the post's own form in bullets.\n\
-         {bullet_emphasis_instruction}\
+         {BULLET_REWRITE_INSTRUCTION}\
          {placement_instruction}\
-         User-attested evidence may support a skills string. Use it in an experience bullet only when its proof_note explicitly names a matching role or project or allow_model_role_placement is true; never infer a responsibility from any other term alone.\n\
-         {invention_rule}\
+         Every entry in the user-attested evidence bank is a capability this person has actually practised. Treat each one as usable in an experience bullet, not only in a skills string: place it in the most plausible existing role given that role's stated stack, title, and scope. The attestation covers the named capability only - never invent an adjacent metric, employer, title, date, credential, or certification around it.\n\
+         {INVENTION_RULE}\
          Put important job keywords without base-resume or user-attested evidence into omitted_unsupported_keywords instead of adding them to the resume.\n\
          Keep each rewritten bullet close to the original length so the locked DOCX layout remains stable.\n\
          Keep the professional summary to the same sentence count and approximate length as the original, leading with the job's own role wording and its highest-weighted supported terms.\n\n\
@@ -467,8 +440,6 @@ pub fn build_tailoring_prompt(
          User-attested evidence bank entries:\n{approved_evidence}\n\n\
          {concise_instruction}\
          {correction_instruction}",
-         bullet_emphasis_instruction = bullet_keyword_emphasis.prompt_instruction(),
-         invention_rule = invention_rule,
     )
 }
 
@@ -573,7 +544,6 @@ pub fn build_tailoring_request(
     base_resume: &serde_json::Value,
     approved_evidence: &[EvidenceEntry],
     priority_attested_terms: &[String],
-    bullet_keyword_emphasis: BulletKeywordEmphasis,
     concise: bool,
     correction_instruction: Option<&str>,
 ) -> serde_json::Value {
@@ -586,7 +556,7 @@ pub fn build_tailoring_request(
             },
             {
                 "role": "user",
-                "content": build_tailoring_prompt(language, parsed_job, analysis, base_resume, approved_evidence, priority_attested_terms, bullet_keyword_emphasis, concise, correction_instruction)
+                "content": build_tailoring_prompt(language, parsed_job, analysis, base_resume, approved_evidence, priority_attested_terms, concise, correction_instruction)
             }
         ],
         "text": {
@@ -608,7 +578,6 @@ pub async fn tailor_resume(
     base_resume: &serde_json::Value,
     approved_evidence: &[EvidenceEntry],
     priority_attested_terms: &[String],
-    bullet_keyword_emphasis: BulletKeywordEmphasis,
     concise: bool,
     correction_instruction: Option<&str>,
 ) -> Result<TailoredResume, TailoringError> {
@@ -621,7 +590,6 @@ pub async fn tailor_resume(
         base_resume,
         approved_evidence,
         priority_attested_terms,
-        bullet_keyword_emphasis,
         concise,
         correction_instruction,
     );
@@ -860,15 +828,17 @@ fn validate_full_bullet_rewrites(
     Ok(())
 }
 
+/// Returns false when a replaced bullet is too short to be a real accomplishment.
+fn replacement_is_substantial(text: &str) -> bool {
+    text.split_whitespace().count() >= MIN_REPLACED_WORDS
+}
+
 /// Returns false when a replaced bullet reads as a keyword dump rather than prose.
 ///
 /// The prompt is the primary quality control; this is a deliberately loose floor that only
 /// catches egregious output. An existing base bullet already names six tools in one list, so
 /// the run limit sits above that.
 fn replacement_reads_as_prose(text: &str) -> bool {
-    if text.split_whitespace().count() < MIN_REPLACED_WORDS {
-        return false;
-    }
     let mut longest_run = 0usize;
     let mut current_run = 0usize;
     for fragment in text.split(',') {
@@ -889,7 +859,14 @@ fn replacement_length_is_stable(base_bullet: &str, replaced_bullet: &str) -> boo
     replaced_bullet.chars().count() <= limit
 }
 
-fn validate_max_emphasis_bullet_rewrites(
+/// Every bullet must be rewritten and at least one replaced outright.
+///
+/// There is no upper bound and no per-role limit: replacing every bullet in the resume is a
+/// legitimate answer to a job the base bullets do not speak to. The floor is what stops a run
+/// from passing on rephrasing alone. What still constrains a replacement is its content - it
+/// must read as prose and stay near the length of the bullet it replaced, because the DOCX
+/// layout is locked to one page.
+fn validate_bullet_rewrites(
     base: &serde_json::Value,
     tailored: &TailoredResume,
 ) -> Result<(), TailoringError> {
@@ -902,22 +879,14 @@ fn validate_max_emphasis_bullet_rewrites(
         .filter(|decision| decision.outcome == BulletRewriteOutcome::Replaced)
         .collect::<Vec<_>>();
 
-    if replacements.len() < MIN_REPLACED_BULLETS || replacements.len() > MAX_REPLACED_BULLETS {
+    if replacements.len() < MIN_REPLACED_BULLETS {
         return invalid(&format!(
-            "max bullet emphasis requires between {MIN_REPLACED_BULLETS} and {MAX_REPLACED_BULLETS} replaced experience bullets, but {} were marked replaced",
+            "tailoring requires at least {MIN_REPLACED_BULLETS} replaced experience bullet, but {} were marked replaced",
             replacements.len()
         ));
     }
 
-    let mut roles_used = BTreeSet::new();
     for replacement in &replacements {
-        if !roles_used.insert(replacement.experience_index) {
-            return invalid(&format!(
-                "max bullet emphasis allows at most one replaced bullet per role, but experience {} has more than one",
-                replacement.experience_index
-            ));
-        }
-
         let base_bullet = base["experience"][replacement.experience_index]["bullets"]
             [replacement.bullet_index]
             .as_str()
@@ -927,6 +896,12 @@ fn validate_max_emphasis_bullet_rewrites(
             .as_str()
             .unwrap_or_default();
 
+        if !replacement_is_substantial(replaced_bullet) {
+            return invalid(&format!(
+                "replaced experience bullet {}/{} is too short to describe a real accomplishment",
+                replacement.experience_index, replacement.bullet_index
+            ));
+        }
         if !replacement_reads_as_prose(replaced_bullet) {
             return invalid(&format!(
                 "replaced experience bullet {}/{} reads as a keyword list instead of prose",
@@ -961,21 +936,26 @@ fn count_changed_experience_bullets(base: &serde_json::Value, tailored: &serde_j
         .count() as u32
 }
 
+/// Names the selected claims that did not actually land in a bullet.
+///
+/// Each bullet is tested on its own rather than against the concatenation of all of them. Joined,
+/// a phrase counted as placed whenever its individual words happened to be scattered across
+/// different bullets, so a term the user explicitly asked for could be reported as covered while
+/// appearing nowhere as a claim - and the retry below never fired.
 fn missing_model_placement_terms(
     tailored: &serde_json::Value,
     required_terms: &[String],
 ) -> Vec<String> {
-    let experience_text = tailored["experience"]
+    let bullets = tailored["experience"]
         .as_array()
         .into_iter()
         .flatten()
         .flat_map(|job| job["bullets"].as_array().into_iter().flatten())
         .filter_map(serde_json::Value::as_str)
-        .collect::<Vec<_>>()
-        .join(" ");
+        .collect::<Vec<_>>();
     required_terms
         .iter()
-        .filter(|term| !placement_term_is_covered(&experience_text, term))
+        .filter(|term| !placement_term_is_covered_in_any(bullets.iter().copied(), term))
         .cloned()
         .collect()
 }
@@ -1018,21 +998,6 @@ fn apply_measured_coverage(
     tailored.report.covered_keywords = covered;
     tailored.report.omitted_unsupported_keywords = omitted;
     tailored.report.ats_coverage = Some(coverage);
-}
-
-fn reconcile_model_placement_report(report: &mut TailoringReport, selected_terms: &[String]) {
-    report.omitted_unsupported_keywords.retain(|omitted| {
-        !selected_terms.iter().any(|selected| {
-            equivalent_terms(omitted, selected) || placement_equivalent_terms(omitted, selected)
-        })
-    });
-    for selected in selected_terms {
-        if !report.covered_keywords.iter().any(|covered| {
-            equivalent_terms(covered, selected) || placement_equivalent_terms(covered, selected)
-        }) {
-            report.covered_keywords.push(selected.clone());
-        }
-    }
 }
 
 pub(crate) fn content_changes(
@@ -1612,7 +1577,6 @@ fn partial_tailoring_response(
     docx_path: &Path,
     pdf_path: &Path,
     page_count: Option<u32>,
-    bullet_keyword_emphasis: BulletKeywordEmphasis,
     experience_bullets_changed: u32,
     tailored_content: serde_json::Value,
     content_changes: Vec<ContentChange>,
@@ -1642,7 +1606,6 @@ fn partial_tailoring_response(
         validation_status,
         fit_status,
         page_count,
-        bullet_keyword_emphasis,
         experience_bullets_changed,
         report: Some(report),
         tailored_content: Some(tailored_content),
@@ -1767,7 +1730,6 @@ pub async fn tailor_and_render_with_progress(
             &base_resume,
             &request.approved_evidence,
             &request.priority_attested_terms,
-            request.bullet_keyword_emphasis,
             needs_concise_rewrite,
             correction_instruction.as_deref(),
         )
@@ -1810,64 +1772,38 @@ pub async fn tailor_and_render_with_progress(
             );
             return Err(error);
         }
-        let emphasis = request.bullet_keyword_emphasis;
-        if matches!(
-            emphasis,
-            BulletKeywordEmphasis::High | BulletKeywordEmphasis::Max
-        ) {
-            normalize_bullet_rewrite_decisions(&base_resume, &mut tailored, emphasis);
-            let outcome = if emphasis == BulletKeywordEmphasis::Max {
-                validate_max_emphasis_bullet_rewrites(&base_resume, &tailored)
-            } else {
-                validate_full_bullet_rewrites(&base_resume, &tailored)
-            };
-            if let Err(error) = outcome {
-                if attempt < MAX_TAILORING_ATTEMPTS {
-                    let unchanged = unchanged_experience_bullets(&base_resume, &tailored.content);
-                    let unchanged_section = if unchanged.is_empty() {
-                        String::new()
-                    } else {
-                        format!("\n\nUnchanged bullets:\n{unchanged}")
-                    };
-                    correction_instruction = Some(if emphasis == BulletKeywordEmphasis::Max {
-                        format!(
-                            "Your preceding Max-emphasis response was rejected: {error}. Return every experience bullet with different, truthful text, and mark between {MIN_REPLACED_BULLETS} and {MAX_REPLACED_BULLETS} of them as \"replaced\" with at most one replacement per role. A replaced bullet must drop its original angle, target this job's strongest signals, stay grounded in this person's real work in that role, and read as natural prose rather than a list of technologies. Do not compensate by adding more skills or by changing only the report.{unchanged_section}\n\n"
-                        )
-                    } else {
-                        format!(
-                            "Your preceding High-emphasis response was rejected: {error}. Replace the text of every unchanged experience bullet below. Keep every claim truthful, but use a faithful stylistic rephrase when a bullet has no direct job-keyword match. Do not compensate by adding more skills, changing only the report, or labelling unchanged text as rewritten.{unchanged_section}\n\n"
-                        )
-                    });
-                    progress(
-                        reporter,
-                        "safety_validation",
-                        "retrying",
-                        if emphasis == BulletKeywordEmphasis::Max {
-                            "Max emphasis requires grounded bullet replacements; requesting a corrected response."
-                        } else {
-                            "High emphasis requires experience-bullet rewrites; requesting a corrected response."
-                        },
-                        Some(attempt),
-                    );
-                    continue;
-                }
-                let final_error = invalid_message(&format!(
-                    "{emphasis_label} emphasis could not satisfy the experience-bullet requirements after {MAX_TAILORING_ATTEMPTS} attempts: {error}",
-                    emphasis_label = if emphasis == BulletKeywordEmphasis::Max {
-                        "Max"
-                    } else {
-                        "High"
-                    },
+        normalize_bullet_rewrite_decisions(&base_resume, &mut tailored);
+        if let Err(error) = validate_bullet_rewrites(&base_resume, &tailored) {
+            if attempt < MAX_TAILORING_ATTEMPTS {
+                let unchanged = unchanged_experience_bullets(&base_resume, &tailored.content);
+                let unchanged_section = if unchanged.is_empty() {
+                    String::new()
+                } else {
+                    format!("\n\nUnchanged bullets:\n{unchanged}")
+                };
+                correction_instruction = Some(format!(
+                    "Your preceding response was rejected: {error}. Return every experience bullet with different, truthful text, and mark at least {MIN_REPLACED_BULLETS} of them as \"replaced\". Replace as many as this job warrants - there is no cap and no per-role limit. A replaced bullet must drop its original angle, target this job's strongest signals, stay grounded in this person's real work in that role, and read as natural prose rather than a list of technologies. Do not compensate by adding more skills or by changing only the report.{unchanged_section}\n\n"
                 ));
                 progress(
                     reporter,
                     "safety_validation",
-                    "failed",
-                    final_error.to_string(),
+                    "retrying",
+                    "Tailoring requires grounded bullet replacements; requesting a corrected response.",
                     Some(attempt),
                 );
-                return Err(final_error);
+                continue;
             }
+            let final_error = invalid_message(&format!(
+                "tailoring could not satisfy the experience-bullet requirements after {MAX_TAILORING_ATTEMPTS} attempts: {error}"
+            ));
+            progress(
+                reporter,
+                "safety_validation",
+                "failed",
+                final_error.to_string(),
+                Some(attempt),
+            );
+            return Err(final_error);
         }
         let missing_placement_terms =
             missing_model_placement_terms(&tailored.content, &required_placement_terms);
@@ -1906,9 +1842,6 @@ pub async fn tailor_and_render_with_progress(
             &base_resume,
             &mut tailored,
         );
-        // Runs after the rebuild so it can only ever restate terms the placement check above
-        // already verified are present in the bullets.
-        reconcile_model_placement_report(&mut tailored.report, &required_placement_terms);
         correction_instruction = None;
         let experience_bullets_changed =
             count_changed_experience_bullets(&base_resume, &tailored.content);
@@ -1980,7 +1913,6 @@ pub async fn tailor_and_render_with_progress(
                 &docx_path,
                 &pdf_path,
                 None,
-                request.bullet_keyword_emphasis,
                 experience_bullets_changed,
                 tailored.content,
                 changes,
@@ -2024,7 +1956,6 @@ pub async fn tailor_and_render_with_progress(
                 &docx_path,
                 &pdf_path,
                 None,
-                request.bullet_keyword_emphasis,
                 experience_bullets_changed,
                 tailored.content,
                 changes,
@@ -2107,7 +2038,6 @@ pub async fn tailor_and_render_with_progress(
                     validation_status: "passed",
                     fit_status: "passed",
                     page_count: Some(page_count),
-                    bullet_keyword_emphasis: request.bullet_keyword_emphasis,
                     experience_bullets_changed,
                     report: Some(tailored.report),
                     tailored_content: Some(tailored.content),
@@ -2151,7 +2081,6 @@ pub async fn tailor_and_render_with_progress(
                         &docx_path,
                         &pdf_path,
                         page_counts.last().copied(),
-                        request.bullet_keyword_emphasis,
                         experience_bullets_changed,
                         tailored.content,
                         changes,
@@ -2188,7 +2117,6 @@ pub async fn tailor_and_render_with_progress(
                     &docx_path,
                     &pdf_path,
                     None,
-                    request.bullet_keyword_emphasis,
                     experience_bullets_changed,
                     tailored.content,
                     changes,
@@ -2233,7 +2161,6 @@ pub fn failed_response(error: String) -> TailorResponse {
         validation_status: "not_run",
         fit_status: "not_run",
         page_count: None,
-        bullet_keyword_emphasis: BulletKeywordEmphasis::Balanced,
         experience_bullets_changed: 0,
         report: None,
         tailored_content: None,
@@ -2257,11 +2184,10 @@ mod tests {
         build_tailoring_prompt, civil_date_from_days, company_role_slug, content_changes,
         missing_model_placement_terms, normalize_bullet_rewrite_decisions,
         parse_tailored_resume_from_response, partial_tailoring_response, pdf_page_count,
-        publish_verified_artifact, reconcile_model_placement_report, replacement_length_is_stable,
+        publish_verified_artifact, replacement_is_substantial, replacement_length_is_stable,
         replacement_reads_as_prose, sha256_file, slugify, unchanged_experience_bullets,
-        validate_full_bullet_rewrites, validate_max_emphasis_bullet_rewrites,
-        validate_tailored_content, write_variant_files, BulletKeywordEmphasis,
-        BulletRewriteDecision, BulletRewriteOutcome, TailorRequest, TailoredResume,
+        validate_bullet_rewrites, validate_full_bullet_rewrites, validate_tailored_content,
+        write_variant_files, BulletRewriteDecision, BulletRewriteOutcome, TailoredResume,
         TailoringReport, MAX_COMPANY_ROLE_SLUG_LEN,
     };
     use crate::analysis::{JobAnalysis, KeywordSignal};
@@ -2392,17 +2318,7 @@ mod tests {
         "Owned end-to-end delivery of the customer dashboard rewrite, partnering with design on scope.";
 
     #[test]
-    fn max_emphasis_serde_round_trips() {
-        let parsed: BulletKeywordEmphasis = serde_json::from_str("\"max\"").unwrap();
-        assert_eq!(parsed, BulletKeywordEmphasis::Max);
-        assert_eq!(
-            serde_json::to_string(&BulletKeywordEmphasis::Max).unwrap(),
-            "\"max\""
-        );
-    }
-
-    #[test]
-    fn max_emphasis_prompt_requires_grounded_replacements() {
+    fn tailoring_prompt_requires_uncapped_grounded_replacements() {
         let prompt = build_tailoring_prompt(
             "en",
             &json!({"title": "Rust Engineer"}),
@@ -2410,54 +2326,23 @@ mod tests {
             &base_resume(),
             &[],
             &[],
-            BulletKeywordEmphasis::Max,
             false,
             None,
         );
 
-        assert!(prompt.contains("choose between 1 and 3 of the least job-relevant bullets"));
-        assert!(prompt.contains("Replace at most one bullet in any single role"));
+        assert!(prompt.contains("There is no cap and no per-role limit"));
+        assert!(prompt.contains("replace at least one"));
         assert!(prompt.contains("not a list of technologies"));
         assert!(prompt.contains("Keyword stuffing is a failure"));
         assert!(prompt.contains("never invent a metric"));
+        assert!(prompt.contains("Inside a replaced bullet only, you may state a responsibility"));
+        // The whole bank is bullet-eligible now; the old skills-string gate must be gone.
+        assert!(prompt.contains("Treat each one as usable in an experience bullet"));
+        assert!(!prompt.contains("Use it in an experience bullet only when its proof_note"));
     }
 
     #[test]
-    fn max_emphasis_prompt_allows_implied_responsibilities_but_other_levels_do_not() {
-        let carve_out = "Inside a replaced bullet only, you may state a responsibility";
-        let blanket =
-            "Do not invent credentials, employers, tools, metrics, responsibilities, education";
-        let prompt_for = |emphasis| {
-            build_tailoring_prompt(
-                "en",
-                &json!({}),
-                &analysis(),
-                &base_resume(),
-                &[],
-                &[],
-                emphasis,
-                false,
-                None,
-            )
-        };
-
-        let max_prompt = prompt_for(BulletKeywordEmphasis::Max);
-        assert!(max_prompt.contains(carve_out));
-        assert!(!max_prompt.contains(blanket));
-
-        for emphasis in [
-            BulletKeywordEmphasis::Low,
-            BulletKeywordEmphasis::Balanced,
-            BulletKeywordEmphasis::High,
-        ] {
-            let prompt = prompt_for(emphasis);
-            assert!(!prompt.contains(carve_out));
-            assert!(prompt.contains(blanket));
-        }
-    }
-
-    #[test]
-    fn max_emphasis_accepts_one_grounded_replacement_per_role() {
+    fn accepts_a_grounded_replacement() {
         let base = multi_role_base_resume();
         let tailored = max_tailored(
             [REWRITTEN_A, REWRITTEN_B, REPLACED_C],
@@ -2468,11 +2353,11 @@ mod tests {
             ],
         );
 
-        validate_max_emphasis_bullet_rewrites(&base, &tailored).unwrap();
+        validate_bullet_rewrites(&base, &tailored).unwrap();
     }
 
     #[test]
-    fn max_emphasis_requires_at_least_one_replacement() {
+    fn requires_at_least_one_replacement() {
         let base = multi_role_base_resume();
         let tailored = max_tailored(
             [REWRITTEN_A, REWRITTEN_B, REPLACED_C],
@@ -2483,12 +2368,16 @@ mod tests {
             ],
         );
 
-        let error = validate_max_emphasis_bullet_rewrites(&base, &tailored).unwrap_err();
-        assert!(error.to_string().contains("between 1 and 3 replaced"));
+        let error = validate_bullet_rewrites(&base, &tailored).unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("requires at least 1 replaced experience bullet"));
     }
 
+    /// The point of the change: four roles, four replacements, no complaint. The old rule
+    /// capped this at three and would have rejected it.
     #[test]
-    fn max_emphasis_rejects_more_than_three_replacements() {
+    fn accepts_more_replacements_than_the_old_budget_allowed() {
         let base = json!({
             "meta": { "language": "en", "type": "base", "template": "t.docx" },
             "experience": [
@@ -2516,12 +2405,11 @@ mod tests {
             ]),
         };
 
-        let error = validate_max_emphasis_bullet_rewrites(&base, &tailored).unwrap_err();
-        assert!(error.to_string().contains("between 1 and 3 replaced"));
+        validate_bullet_rewrites(&base, &tailored).unwrap();
     }
 
     #[test]
-    fn max_emphasis_rejects_two_replacements_in_one_role() {
+    fn accepts_two_replacements_inside_one_role() {
         let base = multi_role_base_resume();
         let tailored = max_tailored(
             [REPLACED_C, REPLACED_C, REWRITTEN_A],
@@ -2532,14 +2420,27 @@ mod tests {
             ],
         );
 
-        let error = validate_max_emphasis_bullet_rewrites(&base, &tailored).unwrap_err();
-        assert!(error
-            .to_string()
-            .contains("at most one replaced bullet per role"));
+        validate_bullet_rewrites(&base, &tailored).unwrap();
     }
 
     #[test]
-    fn max_emphasis_inherits_the_every_bullet_rewritten_rule() {
+    fn rejects_a_replacement_too_short_to_be_an_accomplishment() {
+        let base = multi_role_base_resume();
+        let tailored = max_tailored(
+            [REWRITTEN_A, REWRITTEN_B, "Owned the dashboard."],
+            vec![
+                decision(0, 0, BulletRewriteOutcome::Rewritten),
+                decision(0, 1, BulletRewriteOutcome::Rewritten),
+                decision(1, 0, BulletRewriteOutcome::Replaced),
+            ],
+        );
+
+        let error = validate_bullet_rewrites(&base, &tailored).unwrap_err();
+        assert!(error.to_string().contains("too short"));
+    }
+
+    #[test]
+    fn inherits_the_every_bullet_rewritten_rule() {
         let base = multi_role_base_resume();
         let tailored = max_tailored(
             [
@@ -2554,14 +2455,14 @@ mod tests {
             ],
         );
 
-        let error = validate_max_emphasis_bullet_rewrites(&base, &tailored).unwrap_err();
+        let error = validate_bullet_rewrites(&base, &tailored).unwrap_err();
         assert!(error
             .to_string()
             .contains("every experience bullet must be rewritten"));
     }
 
     #[test]
-    fn max_emphasis_rejects_a_term_stuffed_replacement() {
+    fn rejects_a_term_stuffed_replacement() {
         let base = multi_role_base_resume();
         let stuffed =
             "Rust, Kubernetes, Axum, Docker, Terraform, Kafka, Redis, GraphQL, gRPC, Postgres, Helm";
@@ -2574,7 +2475,7 @@ mod tests {
             ],
         );
 
-        let error = validate_max_emphasis_bullet_rewrites(&base, &tailored).unwrap_err();
+        let error = validate_bullet_rewrites(&base, &tailored).unwrap_err();
         assert!(error.to_string().contains("reads as a keyword list"));
     }
 
@@ -2582,8 +2483,13 @@ mod tests {
     fn prose_check_accepts_the_tool_list_style_the_base_resume_already_uses() {
         let existing = "Architected RAG and multi-agent systems using Claude, OpenAI, LangChain, LangGraph, ChromaDB, and pgvector, reducing average response times by 40%.";
         assert!(replacement_reads_as_prose(existing));
-        assert!(!replacement_reads_as_prose("Rust, Go, Java"));
-        assert!(!replacement_reads_as_prose("Too short."));
+        assert!(!replacement_reads_as_prose(
+            "Rust, Go, Java, Kotlin, Scala, Elixir, Ruby, Perl, Lua, Nim, Zig"
+        ));
+        // Length is the other half of the pair, and the validator checks both.
+        assert!(!replacement_is_substantial("Rust, Go, Java"));
+        assert!(!replacement_is_substantial("Too short."));
+        assert!(replacement_is_substantial(existing));
     }
 
     #[test]
@@ -2594,26 +2500,21 @@ mod tests {
     }
 
     #[test]
-    fn normalizer_preserves_replaced_only_in_max_mode() {
+    fn normalizer_preserves_a_replaced_claim_on_changed_text() {
         let base = multi_role_base_resume();
-        let decisions = vec![
-            decision(0, 0, BulletRewriteOutcome::Rewritten),
-            decision(0, 1, BulletRewriteOutcome::Rewritten),
-            decision(1, 0, BulletRewriteOutcome::Replaced),
-        ];
-
-        let mut in_max = max_tailored([REWRITTEN_A, REWRITTEN_B, REPLACED_C], decisions.clone());
-        normalize_bullet_rewrite_decisions(&base, &mut in_max, BulletKeywordEmphasis::Max);
-        assert_eq!(
-            in_max.report.bullet_rewrite_decisions[2].outcome,
-            BulletRewriteOutcome::Replaced
+        let mut tailored = max_tailored(
+            [REWRITTEN_A, REWRITTEN_B, REPLACED_C],
+            vec![
+                decision(0, 0, BulletRewriteOutcome::Rewritten),
+                decision(0, 1, BulletRewriteOutcome::Rewritten),
+                decision(1, 0, BulletRewriteOutcome::Replaced),
+            ],
         );
 
-        let mut in_high = max_tailored([REWRITTEN_A, REWRITTEN_B, REPLACED_C], decisions);
-        normalize_bullet_rewrite_decisions(&base, &mut in_high, BulletKeywordEmphasis::High);
+        normalize_bullet_rewrite_decisions(&base, &mut tailored);
         assert_eq!(
-            in_high.report.bullet_rewrite_decisions[2].outcome,
-            BulletRewriteOutcome::Rewritten
+            tailored.report.bullet_rewrite_decisions[2].outcome,
+            BulletRewriteOutcome::Replaced
         );
     }
 
@@ -2633,7 +2534,7 @@ mod tests {
             ],
         );
 
-        normalize_bullet_rewrite_decisions(&base, &mut tailored, BulletKeywordEmphasis::Max);
+        normalize_bullet_rewrite_decisions(&base, &mut tailored);
         assert_eq!(
             tailored.report.bullet_rewrite_decisions[2].outcome,
             BulletRewriteOutcome::NoRelevantMatch
@@ -2649,7 +2550,6 @@ mod tests {
             &base_resume(),
             &[],
             &[],
-            BulletKeywordEmphasis::Balanced,
             false,
             None,
         );
@@ -2678,7 +2578,6 @@ mod tests {
             &base_resume(),
             &evidence,
             &["Angular dans l’expérience".to_string()],
-            BulletKeywordEmphasis::Balanced,
             false,
             None,
         );
@@ -2690,7 +2589,7 @@ mod tests {
     }
 
     #[test]
-    fn selected_claims_must_appear_in_experience_and_are_reconciled_in_report() {
+    fn selected_claims_must_appear_in_experience() {
         let tailored = json!({
             "experience": [{"bullets": ["Built Angular interfaces for internal users."]}]
         });
@@ -2702,20 +2601,33 @@ mod tests {
             missing_model_placement_terms(&tailored, &selected),
             vec!["GCP dans l’expérience".to_string()]
         );
+    }
 
-        let mut report = TailoringReport {
-            covered_keywords: vec![],
-            omitted_unsupported_keywords: vec!["Angular dans l’expérience".to_string()],
-            changed_fields: vec![],
-            safety_notes: vec![],
-            model_estimated_ats_coverage_score: 73,
-            ats_coverage: None,
-            bullet_rewrite_decisions: vec![],
-        };
-        reconcile_model_placement_report(&mut report, &selected[..1]);
-        assert!(report.omitted_unsupported_keywords.is_empty());
-        assert_eq!(report.covered_keywords, vec!["Angular dans l’expérience"]);
-        assert_eq!(report.model_estimated_ats_coverage_score, 73);
+    /// The regression: a phrase whose words are spread over separate bullets was reported as
+    /// placed, so the retry never fired and the term was quietly marked covered.
+    #[test]
+    fn a_claim_split_across_two_bullets_still_counts_as_missing() {
+        let tailored = json!({
+            "experience": [{
+                "bullets": [
+                    "Led the AI platform roadmap across three product teams.",
+                    "Built agent tooling on top of a workflow orchestration layer."
+                ]
+            }]
+        });
+        let selected = vec!["AI agent orchestration".to_string()];
+
+        assert_eq!(
+            missing_model_placement_terms(&tailored, &selected),
+            vec!["AI agent orchestration".to_string()]
+        );
+
+        let placed = json!({
+            "experience": [{
+                "bullets": ["Shipped AI agent orchestration for internal support tooling."]
+            }]
+        });
+        assert!(missing_model_placement_terms(&placed, &selected).is_empty());
     }
 
     #[test]
@@ -2733,44 +2645,11 @@ mod tests {
             &base_resume(),
             &[],
             &[],
-            BulletKeywordEmphasis::Balanced,
             true,
             None,
         );
         assert!(prompt.contains("overflowed to a second page"));
         assert!(prompt.contains("Do not shorten by deleting responsibilities"));
-    }
-
-    #[test]
-    fn high_bullet_emphasis_prioritizes_breadth() {
-        let prompt = build_tailoring_prompt(
-            "en",
-            &json!({}),
-            &analysis(),
-            &base_resume(),
-            &[],
-            &[],
-            BulletKeywordEmphasis::High,
-            false,
-            None,
-        );
-        assert!(prompt.contains("every experience bullet with different, truthful text"));
-        assert!(prompt.contains("primary ATS surface, not skills"));
-        assert!(prompt.contains("A skills-only response is invalid"));
-    }
-
-    #[test]
-    fn omitted_bullet_emphasis_defaults_to_balanced() {
-        let request: TailorRequest = serde_json::from_value(json!({
-            "language": "en",
-            "parsed": {},
-            "analysis": analysis()
-        }))
-        .unwrap();
-        assert_eq!(
-            request.bullet_keyword_emphasis,
-            BulletKeywordEmphasis::Balanced
-        );
     }
 
     #[test]
@@ -3002,7 +2881,7 @@ mod tests {
             ],
         );
 
-        normalize_bullet_rewrite_decisions(&base, &mut tailored, BulletKeywordEmphasis::High);
+        normalize_bullet_rewrite_decisions(&base, &mut tailored);
 
         assert_eq!(
             tailored.report.bullet_rewrite_decisions[0].outcome,
@@ -3162,7 +3041,6 @@ mod tests {
             &docx_path,
             &pdf_path,
             None,
-            BulletKeywordEmphasis::Balanced,
             0,
             base_resume(),
             vec![],
@@ -3226,7 +3104,6 @@ mod tests {
             &docx_path,
             &pdf_path,
             None,
-            BulletKeywordEmphasis::High,
             2,
             base_resume(),
             vec![],

@@ -2,9 +2,9 @@ use crate::{
     analysis::{analyze_job, AnalysisConfig, JobAnalysis},
     error::AppError,
     evidence::{
-        append_banked_terms, approved_evidence_for, equivalent_terms, infer_selected_term_kind,
-        load_evidence_bank, placement_equivalent_terms, preflight_items, remove_evidence,
-        save_selected_evidence, EvidenceBank, EvidenceEntry, PreflightItem, SelectedEvidence,
+        append_banked_terms, approved_evidence_for, infer_selected_term_kind, load_evidence_bank,
+        preflight_items, remove_evidence, save_selected_evidence, EvidenceBank, EvidenceEntry,
+        PreflightItem, SelectedEvidence,
     },
     job_import::{import_from_text, import_from_url, ImportedJob},
     server::{
@@ -13,9 +13,8 @@ use crate::{
     },
     tailoring::{
         content_changes, failed_response, load_base_resume, publish_variant_artifact,
-        tailor_and_render_with_progress, workspace_root, ArtifactProvenance, BulletKeywordEmphasis,
-        BulletRewriteOutcome, PipelineProgress, RetailorMetadata, TailorRequest, TailorResponse,
-        TailoringReport,
+        tailor_and_render_with_progress, workspace_root, ArtifactProvenance, PipelineProgress,
+        RetailorMetadata, TailorRequest, TailorResponse, TailoringReport,
     },
 };
 use serde::{Deserialize, Serialize};
@@ -190,8 +189,6 @@ pub struct GenerateTailoredResumeRequest {
     pub analysis: JobAnalysis,
     #[serde(default)]
     pub selected_evidence: Vec<SelectedEvidence>,
-    #[serde(default)]
-    pub bullet_keyword_emphasis: BulletKeywordEmphasis,
 }
 
 #[derive(Deserialize)]
@@ -232,9 +229,10 @@ fn validate_selected_omitted_terms(
                     "The selected phrase is not in the source result's omitted list: {selected}"
                 ))
             })?;
-        if !validated.iter().any(|existing| {
-            equivalent_terms(existing, canonical) || placement_equivalent_terms(existing, canonical)
-        }) {
+        // Deduped on the canonical wording only. Collapsing on token equivalence discarded the
+        // second of two phrases the user had deliberately ticked, without telling them - and the
+        // dropped one then never reached the model as a required placement.
+        if !validated.iter().any(|existing| existing == canonical) {
             validated.push((*canonical).to_string());
         }
     }
@@ -337,7 +335,6 @@ pub async fn run_resume_pipeline(
             analysis: analysis.clone(),
             approved_evidence: vec![],
             priority_attested_terms: vec![],
-            bullet_keyword_emphasis: BulletKeywordEmphasis::Balanced,
         },
         Some(&reporter),
     )
@@ -686,7 +683,6 @@ pub async fn generate_tailored_resume(
             analysis: request.analysis,
             approved_evidence,
             priority_attested_terms: vec![],
-            bullet_keyword_emphasis: request.bullet_keyword_emphasis,
         },
         Some(&reporter),
     )
@@ -695,8 +691,7 @@ pub async fn generate_tailored_resume(
         Ok(response) => response,
         Err(error) => {
             let message = error.to_string();
-            let mut response = failed_response(message.clone());
-            response.bullet_keyword_emphasis = request.bullet_keyword_emphasis;
+            let response = failed_response(message.clone());
             store_and_emit_outcome(
                 &app,
                 &root,
@@ -814,9 +809,6 @@ pub async fn retailor_resume_with_evidence(
     let preflight = preflight_items(&analysis, &base_resume, &bank);
     let mut approved_evidence = approved_evidence_for(&preflight, &bank, &selected_evidence);
     append_banked_terms(&mut approved_evidence, &bank, &selected_terms);
-    let bullet_keyword_emphasis: BulletKeywordEmphasis =
-        serde_json::from_value(stored.resume["bullet_keyword_emphasis"].clone())
-            .unwrap_or_default();
     let reporter = |event: PipelineProgress| {
         if let Err(error) = app.emit("resume-pipeline-progress", event) {
             eprintln!("[pipeline] Failed to emit progress event: {error}");
@@ -839,7 +831,6 @@ pub async fn retailor_resume_with_evidence(
             analysis: analysis.clone(),
             approved_evidence,
             priority_attested_terms: selected_terms.clone(),
-            bullet_keyword_emphasis,
         },
         Some(&reporter),
     )
@@ -1139,26 +1130,6 @@ fn recover_pipeline_result(
         .iter()
         .filter(|change| change.path.starts_with("/experience/"))
         .count();
-    let total_bullets = base["experience"]
-        .as_array()
-        .map(|entries| {
-            entries
-                .iter()
-                .map(|entry| entry["bullets"].as_array().map(Vec::len).unwrap_or(0))
-                .sum::<usize>()
-        })
-        .unwrap_or(0);
-    let replaced_any_bullet = report
-        .bullet_rewrite_decisions
-        .iter()
-        .any(|decision| decision.outcome == BulletRewriteOutcome::Replaced);
-    let emphasis = if replaced_any_bullet {
-        "max"
-    } else if total_bullets > 0 && experience_bullets_changed == total_bullets {
-        "high"
-    } else {
-        "balanced"
-    };
     let docx_path = variant_dir.join(format!("Xevier_T_CV_{language}.docx"));
     let pdf_path = variant_dir.join(format!("Xevier_T_CV_{language}.pdf"));
     let current_artifact = |path: &Path| {
@@ -1199,7 +1170,6 @@ fn recover_pipeline_result(
             "validation_status": if docx_ready { "passed" } else { "not_run" },
             "fit_status": if pdf_ready { "passed" } else { "not_run" },
             "page_count": if pdf_ready { Some(1) } else { None },
-            "bullet_keyword_emphasis": emphasis,
             "experience_bullets_changed": experience_bullets_changed,
             "report": report,
             "tailored_content": tailored,
@@ -1474,6 +1444,21 @@ mod tests {
             validate_selected_omitted_terms(&["Kubernetes".to_string()], &["Angular", "GCP"])
                 .unwrap_err();
         assert!(error.to_string().contains("not in the source result"));
+    }
+
+    /// The reported bug: two phrases were ticked, one silently vanished. Token equivalence
+    /// treated them as the same claim, so only the first ever reached the model.
+    #[test]
+    fn two_overlapping_selections_both_survive() {
+        let omitted = ["Angular", "Angular dans l’expérience"];
+        let selected = vec![
+            "Angular".to_string(),
+            "Angular dans l’expérience".to_string(),
+        ];
+
+        let validated = validate_selected_omitted_terms(&selected, &omitted).unwrap();
+
+        assert_eq!(validated, vec!["Angular", "Angular dans l’expérience"]);
     }
 
     #[test]

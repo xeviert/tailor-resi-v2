@@ -92,10 +92,10 @@ pub fn save_selected_evidence(
             continue;
         }
         let proof_note = clean_proof(item.proof_note.as_deref());
+        // Ticking a term is the authorization to place it, so the saved entry records that
+        // rather than whatever flag the caller happened to echo back from the preflight.
         match bank.entries.iter_mut().find(|entry| {
-            equivalent(&entry.term, term)
-                || (item.allow_model_role_placement
-                    && placement_equivalent_terms(&entry.term, term))
+            equivalent(&entry.term, term) || placement_equivalent_terms(&entry.term, term)
         }) {
             Some(entry) => {
                 entry.kind = item.kind.clone();
@@ -103,14 +103,14 @@ pub fn save_selected_evidence(
                     entry.proof_note = proof_note;
                 }
                 entry.user_attested = true;
-                entry.allow_model_role_placement |= item.allow_model_role_placement;
+                entry.allow_model_role_placement = true;
             }
             None => bank.entries.push(EvidenceEntry {
                 term: term.to_string(),
                 kind: item.kind.clone(),
                 proof_note,
                 user_attested: true,
-                allow_model_role_placement: item.allow_model_role_placement,
+                allow_model_role_placement: true,
             }),
         }
     }
@@ -243,9 +243,12 @@ pub fn preflight_items(
                         None,
                     )
                 };
-            let eligible_for_bullets = source == "base_resume"
-                || proof_note.is_some()
-                || bank_entry.is_some_and(|entry| entry.allow_model_role_placement);
+            // Anything the user has attested is something they have actually done, so a bank
+            // hit is enough on its own. Requiring a proof note first made 436 of the 454 saved
+            // entries usable only in a skills string, which is most of the resume's ATS surface
+            // spent on a line the reader skims.
+            let eligible_for_bullets =
+                source == "base_resume" || source == "evidence_bank" || proof_note.is_some();
             PreflightItem {
                 term: candidate.term,
                 kind: candidate.kind,
@@ -293,12 +296,22 @@ pub fn approved_evidence_for(
         })
         .collect::<Vec<EvidenceEntry>>();
 
+    // Merge rather than skip on a duplicate. `equivalent_terms` is deliberately loose, so a
+    // session selection could collide with an older bank entry and be dropped outright - taking
+    // its placement rights and its proof note with it, and leaving the model the weaker record.
     for entry in selected_for_prompt(selected) {
-        if !approved
-            .iter()
-            .any(|existing| equivalent_terms(&existing.term, &entry.term))
+        match approved
+            .iter_mut()
+            .find(|existing| equivalent_terms(&existing.term, &entry.term))
         {
-            approved.push(entry);
+            Some(existing) => {
+                existing.allow_model_role_placement |= entry.allow_model_role_placement;
+                existing.user_attested |= entry.user_attested;
+                if existing.proof_note.is_none() {
+                    existing.proof_note = entry.proof_note;
+                }
+            }
+            None => approved.push(entry),
         }
     }
     approved
@@ -335,7 +348,9 @@ pub fn selected_for_prompt(selected: &[SelectedEvidence]) -> Vec<EvidenceEntry> 
                 kind: item.kind.clone(),
                 proof_note: clean_proof(item.proof_note.as_deref()),
                 user_attested: true,
-                allow_model_role_placement: item.allow_model_role_placement,
+                // Attesting to a term is the authorization. Carrying the caller's `false`
+                // through would leave a term the user just ticked stuck in the skills lines.
+                allow_model_role_placement: true,
             })
         })
         .collect()
@@ -359,10 +374,19 @@ pub(crate) fn equivalent_terms(left: &str, right: &str) -> bool {
     equivalent(left, right)
 }
 
-pub(crate) fn placement_term_is_covered(text: &str, term: &str) -> bool {
-    let text_tokens = token_set(text);
+/// True when one single passage carries the whole term.
+///
+/// Callers that hold several passages must not concatenate them first: a phrase whose words are
+/// scattered one apiece across unrelated bullets is not a claim the resume makes.
+pub(crate) fn placement_term_is_covered_in_any<'a>(
+    passages: impl IntoIterator<Item = &'a str>,
+    term: &str,
+) -> bool {
     let term_tokens = placement_token_set(term);
-    !term_tokens.is_empty() && term_tokens.is_subset(&text_tokens)
+    !term_tokens.is_empty()
+        && passages
+            .into_iter()
+            .any(|passage| term_tokens.is_subset(&token_set(passage)))
 }
 
 pub(crate) fn placement_equivalent_terms(left: &str, right: &str) -> bool {
@@ -980,7 +1004,7 @@ mod tests {
     }
 
     #[test]
-    fn saved_responsibility_needs_a_proof_note_for_bullet_use() {
+    fn a_note_less_bank_entry_is_still_usable_in_a_bullet() {
         let analysis = analysis(vec![signal(
             "Own production deployment",
             "responsibility",
@@ -989,7 +1013,7 @@ mod tests {
         let bank = EvidenceBank {
             version: 1,
             entries: vec![EvidenceEntry {
-                term: "Production deployment ownership".into(),
+                term: "Own production deployment".into(),
                 kind: "responsibility".into(),
                 proof_note: None,
                 user_attested: true,
@@ -997,7 +1021,10 @@ mod tests {
             }],
         };
         let items = preflight_items(&analysis, &serde_json::json!({}), &bank);
-        assert!(!items[0].eligible_for_bullets);
+        // Attesting to it is the authorization. Demanding a proof note on top of that left
+        // almost the whole saved bank able to feed only a skills string.
+        assert_eq!(items[0].source, "evidence_bank");
+        assert!(items[0].eligible_for_bullets);
     }
 
     #[test]
@@ -1037,7 +1064,8 @@ mod tests {
 
         assert_eq!(bank.entries.len(), 1);
         assert_eq!(bank.version, 2);
-        assert!(!bank.entries[0].allow_model_role_placement);
+        // Saving is attesting, and attesting authorizes placement.
+        assert!(bank.entries[0].allow_model_role_placement);
         assert_eq!(bank.entries[0].term, "English fluency");
         assert_eq!(
             bank.entries[0].proof_note.as_deref(),
@@ -1068,13 +1096,30 @@ mod tests {
 
     #[test]
     fn placement_coverage_ignores_experience_wrapper_words() {
-        assert!(placement_term_is_covered(
-            "Développé des interfaces Angular pour des applications métier.",
+        assert!(placement_term_is_covered_in_any(
+            ["Développé des interfaces Angular pour des applications métier."],
             "Angular dans l’expérience"
         ));
-        assert!(placement_term_is_covered(
-            "Applied Domain-Driven Design to modular backend services.",
+        assert!(placement_term_is_covered_in_any(
+            ["Applied Domain-Driven Design to modular backend services."],
             "pratique du Domain-Driven Design dans l’expérience"
+        ));
+    }
+
+    #[test]
+    fn placement_coverage_refuses_a_term_split_across_passages() {
+        let passages = [
+            "Led the AI platform roadmap for the payments org.",
+            "Built agent tooling on top of an orchestration layer.",
+        ];
+        // Every word is present, but no single bullet makes the claim.
+        assert!(!placement_term_is_covered_in_any(
+            passages,
+            "AI agent orchestration"
+        ));
+        assert!(placement_term_is_covered_in_any(
+            ["Shipped AI agent orchestration for internal tooling."],
+            "AI agent orchestration"
         ));
     }
 
@@ -1199,6 +1244,33 @@ mod tests {
         let preflight = vec![banked_item("Kubernetes")];
         let approved = approved_evidence_for(&preflight, &bank, &[selection("Kubernetes")]);
         assert_eq!(approved.len(), 1);
+    }
+
+    /// The session selection used to be dropped on a duplicate, taking its placement rights
+    /// with it and leaving the model the weaker banked record.
+    #[test]
+    fn a_duplicate_selection_merges_its_rights_into_the_banked_entry() {
+        let bank = bank_with(vec![banked("Kubernetes")]);
+        assert!(!bank.entries[0].allow_model_role_placement);
+        let preflight = vec![banked_item("Kubernetes")];
+
+        let mut chosen = selection("Kubernetes");
+        chosen.proof_note = Some("Ran the StealthX cluster".to_string());
+        let approved = approved_evidence_for(&preflight, &bank, &[chosen]);
+
+        assert_eq!(approved.len(), 1);
+        assert!(approved[0].allow_model_role_placement);
+        assert_eq!(
+            approved[0].proof_note.as_deref(),
+            Some("Ran the StealthX cluster")
+        );
+    }
+
+    #[test]
+    fn a_fresh_selection_reaches_the_prompt_bullet_eligible() {
+        let entries = selected_for_prompt(&[selection("gRPC")]);
+        assert!(entries[0].user_attested);
+        assert!(entries[0].allow_model_role_placement);
     }
 
     #[test]

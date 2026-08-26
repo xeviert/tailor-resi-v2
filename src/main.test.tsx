@@ -30,7 +30,6 @@ function completedResume(status: 'completed' | 'partial' | 'failed' = 'completed
     validation_status: status === 'completed' ? 'passed' : 'not_run',
     fit_status: status === 'completed' ? 'passed' : 'not_run',
     page_count: status === 'completed' ? 1 : null,
-    bullet_keyword_emphasis: 'balanced' as const,
     experience_bullets_changed: 3,
     report: {
       estimated_ats_coverage_score: 84,
@@ -78,7 +77,7 @@ describe('always-visible run summary', () => {
 
   // A summary that does not name the posting is unreadable once more than one job has been
   // tailored: nothing in the stored outcome identifies the job, so the capture supplies it.
-  it('names the job post, language and emphasis the result belongs to', () => {
+  it('names the job post and language the result belongs to', () => {
     const outcome = localOutcome({
       captureId: 2,
       language: 'fr',
@@ -89,7 +88,7 @@ describe('always-visible run summary', () => {
 
     expect(screen.getByRole('heading', { name: 'Backend Engineer' })).toBeVisible();
     expect(screen.getByTestId('run-summary-job')).toHaveTextContent(
-      'Example Co · French resume · balanced keyword emphasis',
+      'Example Co · French resume',
     );
     expect(screen.getByRole('link', { name: 'View job post ->' })).toHaveAttribute(
       'href',
@@ -99,7 +98,7 @@ describe('always-visible run summary', () => {
     expect(screen.getByText('Analysis and tailored resume ready')).toBeVisible();
   });
 
-  it('drops the emphasis and the link when the run has neither', () => {
+  it('drops the job link when the run has none', () => {
     const outcome = localOutcome({ captureId: 2, language: 'en', analysis });
     render(
       <RunSummaryPanel
@@ -111,7 +110,6 @@ describe('always-visible run summary', () => {
     expect(screen.getByTestId('run-summary-job')).toHaveTextContent(
       'Example Co · English resume',
     );
-    expect(screen.getByTestId('run-summary-job')).not.toHaveTextContent('emphasis');
     expect(screen.queryByRole('link', { name: 'View job post ->' })).not.toBeInTheDocument();
   });
 
@@ -194,10 +192,9 @@ describe('always-visible run summary', () => {
     );
   });
 
-  it('discloses bullets that max emphasis replaced outright', () => {
+  it('discloses bullets that were replaced outright', () => {
     const resume = {
       ...completedResume(),
-      bullet_keyword_emphasis: 'max' as const,
       experience_bullets_changed: 3,
       report: {
         estimated_ats_coverage_score: 88,
@@ -242,7 +239,6 @@ describe('always-visible run summary', () => {
   it('omits the replaced-bullet block when nothing was replaced', () => {
     const resume = {
       ...completedResume(),
-      bullet_keyword_emphasis: 'high' as const,
       report: {
         estimated_ats_coverage_score: 84,
         omitted_unsupported_keywords: [],
