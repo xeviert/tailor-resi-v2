@@ -51,7 +51,7 @@ function completedResume(score = 73, omitted = ['Angular in experience']) {
       estimated_ats_coverage_score: score,
       omitted_unsupported_keywords: omitted,
     },
-    tailored_content: { experience: [], skills: {} },
+    tailored_content: { summary: '', experience: [], skills: {} },
     content_changes: [],
     docx_path: null,
     latest_docx_path: null,

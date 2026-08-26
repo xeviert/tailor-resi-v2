@@ -15,8 +15,21 @@ This directory keeps the resume layout stable while allowing job-specific text e
 - `qa/`: validation or rendering QA artifacts.
 - `scripts/ResumeWorkbench.ps1`: runnable workbench utility.
 
-Header/contact information, section headings, and education/formation are locked in
-the DOCX templates. Experience and skills are editable through JSON.
+Header/contact information, section headings, education/formation, and the
+earlier-experience header block are locked in the DOCX templates. The professional
+summary, experience bullets, the company/role lines of the three most recent roles,
+and the skills lines are editable through JSON.
+
+## Earlier Experience
+
+Artificial Compute, Rodeo Logistics, and DevWorks are consolidated into one
+`experience` entry whose header (job title, years, company list, role list) is a single
+locked paragraph in the template. Only its bullet is editable. The entry still carries
+`company`, `title`, and `dates` in JSON even though they are never rendered, because the
+ATS scorer and the evidence preflight read them.
+
+`locked_experience_headers` in `scripts/ResumeWorkbench.ps1` lists which experience
+indices work this way, and `Flatten-Content` skips their `company_line`/`title_line`.
 
 ## Common Commands
 

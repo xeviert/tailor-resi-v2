@@ -1,107 +1,84 @@
 {
-  "received_at_ms": 1787328720134,
+  "received_at_ms": 1787755710968,
   "payload": {
-    "extraction": "llm",
-    "importedAtMs": 1787328720134,
+    "capturedCount": 0,
     "json": {
-      "company": "Censys",
-      "company_description": "Censys’ mission is to be the one place to understand everything on the internet. Frustrated by the lack of trustworthy Internet intelligence, we set out to create the industry’s most comprehensive, accurate, and up-to-date map of the Internet. Today, Censys delivers real-time Internet intelligence and actionable threat insights to global governments, over 50% of the Fortune 500, and leading threat intelligence providers worldwide.",
-      "company_hq": null,
-      "compensation": "For high cost of living areas (San Francisco Bay, New York City, and Seattle), the expected salary range for this position is $143,000 USD - $177,000 USD, plus bonus eligibility and equity.\n\nFor all other US locations, the expected salary range for this position is $125,000 USD - $165,000 USD, plus bonus eligibility and equity.",
-      "date_posted": null,
-      "description": "Fronted Engineer\nRemote (US/Canada)\n\nCompany Background\n\nCensys’ mission is to be the one place to understand everything on the internet. Frustrated by the lack of trustworthy Internet intelligence, we set out to create the industry’s most comprehensive, accurate, and up-to-date map of the Internet. Today, Censys delivers real-time Internet intelligence and actionable threat insights to global governments, over 50% of the Fortune 500, and leading threat intelligence providers worldwide.\n\nLocation:\n\nThis position is 100% remote within the United States or Canada.\n\nRole Summary\n\nWe're hiring a Mid-level UI Engineer to contributed to significant portions of the frontend of the Censys Platform on Exposure Management Team. You'll be driving epic-scale work across account and integration management, user settings and controls, as well as the new product surfaces that bring Censys intelligence to life for analysts and security professionals worldwide. Working in close partnership with Design and Product to set direction, you’ll make architectural decisions, and ship high-quality experiences that enterprise customers depend on daily. Our stack is Remix and React with a rich TypeScript ecosystem, and we hold a high bar for testing discipline, accessibility, and long-term maintainability.\n\nWhat You'll Do\n\nDrive large frontend projects for enterprise account management, third party integrations, and the larger Censys Platform.\nSurface new data types and product capabilities through well-architected, accessible UI\nPartner closely with Design as a peer, translating their intent faithfully, while working to maintain quality and performance.\nWork with Product to clarify requirements, negotiate scope, and keep epics moving forward\nProvide an example of frontend quality for the team: testing standards, accessibility requirements, and component architecture decisions\n\nWhat You'll Bring\n\n3+ years of software engineering experience with strong depth in React and TypeScript\nProven ability to drive epic-level frontend work end-to-end\nStrong testing discipline: unit, integration, and end-to-end coverage\nSolid accessibility fundamentals: WCAG standards, semantic HTML, keyboard navigation, and screen reader compatibility\nSystem-level thinking for frontend: component architecture, state management, data-fetching patterns, and performance tradeoffs\nCollaborative approach to working with Design and Product on future projects\nStrong opinions loosely held\n\nWhat Sets You Apart\n\nExperience building or contributing to a shared component library or design system\nFamiliarity with backend APIs — you can read service contracts, have an informed conversation with backend engineers, and understand what's feasible\nExperience with Remix or other server-rendered React frameworks\nSecurity domain experience or genuine interest in the security intelligence space\nData visualization or complex table/grid UI work at scale\n\nFor high cost of living areas (San Francisco Bay, New York City, and Seattle), the expected salary range for this position is $143,000 USD - $177,000 USD, plus bonus eligibility and equity.\n\nFor all other US locations, the expected salary range for this position is $125,000 USD - $165,000 USD, plus bonus eligibility and equity.\n\nJob level and actual compensation will be decided based on factors including, but not limited to, individual qualifications objectively assessed during the interview process (including skills and prior relevant experience, potential impact, and scope of role), market demands, and specific work location. The listed range is a guideline, and the range for this role may be modified. For roles that are available to be filled remotely, the pay range is localized according to employee work location by a factor of between 83% and 100% of range. Please discuss your specific work location with your recruiter for more information.\n\nCensys offers a competitive benefits package to employees, including equity, health, dental & vision coverage, retirement with company contribution, parental leave, mental health & wellness benefits, flexible PTO, and a professional development stipend. Censys also offers sales incentive pay for most sales roles and an annual bonus plan for eligible non-sales roles. Censys’s compensation and benefits are subject to change and may be modified in the future. Please see our careers page for more details.\n\nWe will work to ensure individuals with disabilities are provided reasonable accommodation to apply for a role, participate in the interview process, perform essential job functions, and receive other benefits and privileges of employment. If you require accommodation, please reach out to your recruiter. These modifications enable an individual with a disability to have an equal opportunity not only to get a job, but successfully perform their job tasks to the same extent as people without disabilities.\n\nTo ensure the integrity of our hiring process and facilitate a more personal connection, we require all candidates to keep their cameras on during video interviews. Additionally, if hired, we would love to bring you to our HQ in Ann Arbor for in-person onboarding.\n\nBy applying for this job, the candidate acknowledges and agrees that any personal data contained in their application or supporting materials will be processed in accordance with our Censys Privacy Policy.",
-      "education_requirement": null,
-      "extraction_confidence": "high",
-      "industry_tags": [
-        "Cybersecurity",
-        "Internet intelligence",
-        "Software"
+      "@context": "http://schema.org",
+      "@type": "JobPosting",
+      "applicantLocationRequirements": {
+        "@type": "Country"
+      },
+      "datePosted": "2026-08-25T14:03:31Z",
+      "description": "<p>La plateforme de gestion financière “tout en un” de Basikon repose sur une technologie sophistiquée, afin de permettre à nos clients de “devenir des fintechs”.</p><p>Notre méthodologie hyper-agile repose sur un ensemble d’innovation accélératrice</p><ul><li><p>Une stack unifié sur le client et le serveur, reposant sur un langage incontournable : Javascript</p></li><li><p>Une technologie low-code permettant de développer de la logique métier avec une productivité inégalée</p></li><li><p>Une plateforme “cloud native” agnostique et hyper résiliente, opérant simultanément sur tous les grand fournisseurs cloud</p></li><li><p>Une chaine CI/CD de pointe</p></li><li><p>Une plateforme de test permettant de garantir la non régression</p></li></ul><p>Sur ce stack nous avons développé une plateforme cloud très riche en fonctionnalité, que nous avons déployée dans 15 banque en France et en Afrique.</p><p>Nous avons besoin d’un développeur expérimenté pour faire encore plus progresser notre plateforme.</p><ul><li><p>Vous contribuerez à implémenter des technologies cloud sophistiquées</p></li><li><p>Votre curiosité et votre autonomie vous permettront d’être une force de proposition</p></li><li><p>Grâce à notre stack simplificateur votre code sera “lean” et vous aurez la satisfaction d’obtenir une productivité maximale</p></li></ul><p>L’opportunité de réaliser une plateforme cloud universelle n’est pas donné à tout le monde, venez rejoindre l’univers Basikon pour inventer la plateforme financière de demain !</p>",
+      "educationRequirements": {
+        "@type": "EducationalOccupationalCredential",
+        "credentialCategory": "postgraduate degree"
+      },
+      "employmentType": "FULL_TIME",
+      "experienceRequirements": {
+        "@type": "OccupationalExperienceRequirements",
+        "monthsOfExperience": 60
+      },
+      "hiringOrganization": {
+        "@type": "Organization",
+        "address": {
+          "@type": "PostalAddress",
+          "addressCountry": "FR",
+          "addressLocality": "Paris",
+          "addressRegion": "Paris",
+          "postalCode": "75004",
+          "streetAddress": "5, Rue du Cloître Saint-Merri"
+        },
+        "logo": "https://cdn-images.welcometothejungle.com/TnPzjQmy-ErzdWMlA0aMMxRrCk117y4h9FVqIX9Pyg0/rs:auto:400::/q:85/czM6Ly93dHRqLXByb2R1Y3Rpb24vdXBsb2Fkcy9vcmdhbml6YXRpb24vbG9nby81ODMzLzE2NjUxNC83NzU0NzQ1Yy04YWEzLTRkOTQtYmI2My02NzZkMzkzNTc0Y2YucG5n",
+        "name": "Basikon",
+        "sameAs": "http://www.basikon.com"
+      },
+      "industry": "Logiciels, Finance",
+      "jobLocation": [
+        {
+          "@type": "Place",
+          "address": {
+            "@type": "PostalAddress",
+            "addressCountry": "FR",
+            "addressLocality": "Paris",
+            "addressRegion": "Paris",
+            "postalCode": "75004",
+            "streetAddress": "5 Rue du Cloître Saint-Merri, 75004 Paris, France"
+          }
+        }
       ],
-      "is_job_posting": true,
-      "job_type": "Unknown",
-      "location": "Remote (US/Canada)",
-      "locations": [
-        "United States",
-        "Canada"
-      ],
-      "qualifications": "What You'll Bring\n\n3+ years of software engineering experience with strong depth in React and TypeScript\nProven ability to drive epic-level frontend work end-to-end\nStrong testing discipline: unit, integration, and end-to-end coverage\nSolid accessibility fundamentals: WCAG standards, semantic HTML, keyboard navigation, and screen reader compatibility\nSystem-level thinking for frontend: component architecture, state management, data-fetching patterns, and performance tradeoffs\nCollaborative approach to working with Design and Product on future projects\nStrong opinions loosely held\n\nWhat Sets You Apart\n\nExperience building or contributing to a shared component library or design system\nFamiliarity with backend APIs — you can read service contracts, have an informed conversation with backend engineers, and understand what's feasible\nExperience with Remix or other server-rendered React frameworks\nSecurity domain experience or genuine interest in the security intelligence space\nData visualization or complex table/grid UI work at scale",
-      "remote": true,
-      "skills": [
-        "React",
-        "TypeScript",
-        "Remix",
-        "Frontend engineering",
-        "Unit testing",
-        "Integration testing",
-        "End-to-end testing",
-        "WCAG standards",
-        "Semantic HTML",
-        "Keyboard navigation",
-        "Screen reader compatibility",
-        "Component architecture",
-        "State management",
-        "Data-fetching patterns",
-        "Performance optimization",
-        "Backend APIs",
-        "Design systems",
-        "Data visualization",
-        "Complex table/grid UI"
-      ],
-      "title": "Fronted Engineer",
-      "years_experience_max": null,
-      "years_experience_min": 3
+      "jobLocationType": "TELECOMMUTE",
+      "qualifications": "Vous êtes une personne passionnée et avez commencé à développer par vous même avant de rejoindre votre école ; vous avez déjà une expérience professionnelle de plusieurs années.",
+      "title": "Développeur JS Full-Stack Senior",
+      "validThrough": "2026-11-23T15:03:31.000Z"
     },
-    "pageTitle": "",
-    "source": "text_import",
-    "sourceText": "Fronted Engineer\nRemote (US/Canada)\nCompany Background\nCensys’ mission is to be the one place to understand everything on the internet. Frustrated by the lack of trustworthy Internet intelligence, we set out to create the industry’s most comprehensive, accurate, and up-to-date map of the Internet. Today, Censys delivers real-time Internet intelligence and actionable threat insights to global governments, over 50% of the Fortune 500, and leading threat intelligence providers worldwide.\n\nLocation: \n\nThis position is 100% remote within the United States or Canada.\n\nRole Summary\n\nWe're hiring a Mid-level UI Engineer to contributed to significant portions of the frontend of the Censys Platform on Exposure Management Team. You'll be driving epic-scale work across account and integration management, user settings and controls, as well as the new product surfaces that bring Censys intelligence to life for analysts and security professionals worldwide. Working in close partnership with Design and Product to set direction, you’ll make architectural decisions, and ship high-quality experiences that enterprise customers depend on daily. Our stack is Remix and React with a rich TypeScript ecosystem, and we hold a high bar for testing discipline, accessibility, and long-term maintainability.\n\nWhat You'll Do\n\nDrive large frontend projects for enterprise account management, third party integrations, and the larger Censys Platform.\nSurface new data types and product capabilities through well-architected, accessible UI\nPartner closely with Design as a peer, translating their intent faithfully, while working to maintain quality and performance.\nWork with Product to clarify requirements, negotiate scope, and keep epics moving forward\nProvide an example of frontend quality for the team: testing standards, accessibility requirements, and component architecture decisions\nWhat You'll Bring\n\n3+ years of software engineering experience with strong depth in React and TypeScript\nProven ability to drive epic-level frontend work end-to-end\nStrong testing discipline: unit, integration, and end-to-end coverage\nSolid accessibility fundamentals: WCAG standards, semantic HTML, keyboard navigation, and screen reader compatibility\nSystem-level thinking for frontend: component architecture, state management, data-fetching patterns, and performance tradeoffs\nCollaborative approach to working with Design and Product on future projects\nStrong opinions loosely held\nWhat Sets You Apart\n\nExperience building or contributing to a shared component library or design system\nFamiliarity with backend APIs — you can read service contracts, have an informed conversation with backend engineers, and understand what's feasible\nExperience with Remix or other server-rendered React frameworks\nSecurity domain experience or genuine interest in the security intelligence space\nData visualization or complex table/grid UI work at scale\nFor high cost of living areas (San Francisco Bay, New York City, and Seattle), the expected salary range for this position is $143,000 USD - $177,000 USD, plus bonus eligibility and equity. \n\nFor all other US locations, the expected salary range for this position is $125,000 USD - $165,000 USD, plus bonus eligibility and equity.  \n\nJob level and actual compensation will be decided based on factors including, but not limited to, individual qualifications objectively assessed during the interview process (including skills and prior relevant experience, potential impact, and scope of role), market demands, and specific work location. The listed range is a guideline, and the range for this role may be modified. For roles that are available to be filled remotely, the pay range is localized according to employee work location by a factor of between 83% and 100% of range. Please discuss your specific work location with your recruiter for more information.\n\nCensys offers a competitive benefits package to employees, including equity, health, dental & vision coverage, retirement with company contribution, parental leave, mental health & wellness benefits, flexible PTO, and a professional development stipend. Censys also offers sales incentive pay for most sales roles and an annual bonus plan for eligible non-sales roles. Censys’s compensation and benefits are subject to change and may be modified in the future. Please see our careers page for more details.\n\nWe will work to ensure individuals with disabilities are provided reasonable accommodation to apply for a role, participate in the interview process, perform essential job functions, and receive other benefits and privileges of employment. If you require accommodation, please reach out to your recruiter. These modifications enable an individual with a disability to have an equal opportunity not only to get a job, but successfully perform their job tasks to the same extent as people without disabilities.\n\nTo ensure the integrity of our hiring process and facilitate a more personal connection, we require all candidates to keep their cameras on during video interviews. Additionally, if hired, we would love to bring you to our HQ in Ann Arbor for in-person onboarding.\n\nBy applying for this job, the candidate acknowledges and agrees that any personal data contained in their application or supporting materials will be processed in accordance with our Censys Privacy Policy.",
-    "sourceUrl": ""
+    "pageTitle": "Senior Full-Stack JavaScript Developer - Basikon - Permanent Contract - Fully Remote",
+    "score": 54.24,
+    "sourceUrl": "https://www.welcometothejungle.com/fr/companies/basikon/jobs/developpeur-js-full-stack-it-ops-senior"
   },
   "parsed": {
-    "company": "Censys",
-    "company_description": "Censys’ mission is to be the one place to understand everything on the internet. Frustrated by the lack of trustworthy Internet intelligence, we set out to create the industry’s most comprehensive, accurate, and up-to-date map of the Internet. Today, Censys delivers real-time Internet intelligence and actionable threat insights to global governments, over 50% of the Fortune 500, and leading threat intelligence providers worldwide.",
-    "compensation": "For high cost of living areas (San Francisco Bay, New York City, and Seattle), the expected salary range for this position is $143,000 USD - $177,000 USD, plus bonus eligibility and equity.\n\nFor all other US locations, the expected salary range for this position is $125,000 USD - $165,000 USD, plus bonus eligibility and equity.",
-    "description": "Fronted Engineer\nRemote (US/Canada)\n\nCompany Background\n\nCensys’ mission is to be the one place to understand everything on the internet. Frustrated by the lack of trustworthy Internet intelligence, we set out to create the industry’s most comprehensive, accurate, and up-to-date map of the Internet. Today, Censys delivers real-time Internet intelligence and actionable threat insights to global governments, over 50% of the Fortune 500, and leading threat intelligence providers worldwide.\n\nLocation:\n\nThis position is 100% remote within the United States or Canada.\n\nRole Summary\n\nWe're hiring a Mid-level UI Engineer to contributed to significant portions of the frontend of the Censys Platform on Exposure Management Team. You'll be driving epic-scale work across account and integration management, user settings and controls, as well as the new product surfaces that bring Censys intelligence to life for analysts and security professionals worldwide. Working in close partnership with Design and Product to set direction, you’ll make architectural decisions, and ship high-quality experiences that enterprise customers depend on daily. Our stack is Remix and React with a rich TypeScript ecosystem, and we hold a high bar for testing discipline, accessibility, and long-term maintainability.\n\nWhat You'll Do\n\nDrive large frontend projects for enterprise account management, third party integrations, and the larger Censys Platform.\nSurface new data types and product capabilities through well-architected, accessible UI\nPartner closely with Design as a peer, translating their intent faithfully, while working to maintain quality and performance.\nWork with Product to clarify requirements, negotiate scope, and keep epics moving forward\nProvide an example of frontend quality for the team: testing standards, accessibility requirements, and component architecture decisions\n\nWhat You'll Bring\n\n3+ years of software engineering experience with strong depth in React and TypeScript\nProven ability to drive epic-level frontend work end-to-end\nStrong testing discipline: unit, integration, and end-to-end coverage\nSolid accessibility fundamentals: WCAG standards, semantic HTML, keyboard navigation, and screen reader compatibility\nSystem-level thinking for frontend: component architecture, state management, data-fetching patterns, and performance tradeoffs\nCollaborative approach to working with Design and Product on future projects\nStrong opinions loosely held\n\nWhat Sets You Apart\n\nExperience building or contributing to a shared component library or design system\nFamiliarity with backend APIs — you can read service contracts, have an informed conversation with backend engineers, and understand what's feasible\nExperience with Remix or other server-rendered React frameworks\nSecurity domain experience or genuine interest in the security intelligence space\nData visualization or complex table/grid UI work at scale\n\nFor high cost of living areas (San Francisco Bay, New York City, and Seattle), the expected salary range for this position is $143,000 USD - $177,000 USD, plus bonus eligibility and equity.\n\nFor all other US locations, the expected salary range for this position is $125,000 USD - $165,000 USD, plus bonus eligibility and equity.\n\nJob level and actual compensation will be decided based on factors including, but not limited to, individual qualifications objectively assessed during the interview process (including skills and prior relevant experience, potential impact, and scope of role), market demands, and specific work location. The listed range is a guideline, and the range for this role may be modified. For roles that are available to be filled remotely, the pay range is localized according to employee work location by a factor of between 83% and 100% of range. Please discuss your specific work location with your recruiter for more information.\n\nCensys offers a competitive benefits package to employees, including equity, health, dental & vision coverage, retirement with company contribution, parental leave, mental health & wellness benefits, flexible PTO, and a professional development stipend. Censys also offers sales incentive pay for most sales roles and an annual bonus plan for eligible non-sales roles. Censys’s compensation and benefits are subject to change and may be modified in the future. Please see our careers page for more details.\n\nWe will work to ensure individuals with disabilities are provided reasonable accommodation to apply for a role, participate in the interview process, perform essential job functions, and receive other benefits and privileges of employment. If you require accommodation, please reach out to your recruiter. These modifications enable an individual with a disability to have an equal opportunity not only to get a job, but successfully perform their job tasks to the same extent as people without disabilities.\n\nTo ensure the integrity of our hiring process and facilitate a more personal connection, we require all candidates to keep their cameras on during video interviews. Additionally, if hired, we would love to bring you to our HQ in Ann Arbor for in-person onboarding.\n\nBy applying for this job, the candidate acknowledges and agrees that any personal data contained in their application or supporting materials will be processed in accordance with our Censys Privacy Policy.",
-    "domain": "pasted-text",
+    "company": "Basikon",
+    "company_hq": "Paris, FR",
+    "company_logo": "https://cdn-images.welcometothejungle.com/TnPzjQmy-ErzdWMlA0aMMxRrCk117y4h9FVqIX9Pyg0/rs:auto:400::/q:85/czM6Ly93dHRqLXByb2R1Y3Rpb24vdXBsb2Fkcy9vcmdhbml6YXRpb24vbG9nby81ODMzLzE2NjUxNC83NzU0NzQ1Yy04YWEzLTRkOTQtYmI2My02NzZkMzkzNTc0Y2YucG5n",
+    "company_website": "http://www.basikon.com",
+    "date_posted": "2026-08-25T14:03:31Z",
+    "description": "La plateforme de gestion financière “tout en un” de Basikon repose sur une technologie sophistiquée, afin de permettre à nos clients de “devenir des fintechs”. Notre méthodologie hyper-agile repose sur un ensemble d’innovation accélératrice Une stack unifié sur le client et le serveur, reposant sur un langage incontournable : Javascript Une technologie low-code permettant de développer de la logique métier avec une productivité inégalée Une plateforme “cloud native” agnostique et hyper résiliente, opérant simultanément sur tous les grand fournisseurs cloud Une chaine CI/CD de pointe Une plateforme de test permettant de garantir la non régression Sur ce stack nous avons développé une plateforme cloud très riche en fonctionnalité, que nous avons déployée dans 15 banque en France et en Afrique. Nous avons besoin d’un développeur expérimenté pour faire encore plus progresser notre plateforme. Vous contribuerez à implémenter des technologies cloud sophistiquées Votre curiosité et votre autonomie vous permettront d’être une force de proposition Grâce à notre stack simplificateur votre code sera “lean” et vous aurez la satisfaction d’obtenir une productivité maximale L’opportunité de réaliser une plateforme cloud universelle n’est pas donné à tout le monde, venez rejoindre l’univers Basikon pour inventer la plateforme financière de demain !",
+    "description_html": "<p>La plateforme de gestion financière “tout en un” de Basikon repose sur une technologie sophistiquée, afin de permettre à nos clients de “devenir des fintechs”.</p><p>Notre méthodologie hyper-agile repose sur un ensemble d’innovation accélératrice</p><ul><li><p>Une stack unifié sur le client et le serveur, reposant sur un langage incontournable : Javascript</p></li><li><p>Une technologie low-code permettant de développer de la logique métier avec une productivité inégalée</p></li><li><p>Une plateforme “cloud native” agnostique et hyper résiliente, opérant simultanément sur tous les grand fournisseurs cloud</p></li><li><p>Une chaine CI/CD de pointe</p></li><li><p>Une plateforme de test permettant de garantir la non régression</p></li></ul><p>Sur ce stack nous avons développé une plateforme cloud très riche en fonctionnalité, que nous avons déployée dans 15 banque en France et en Afrique.</p><p>Nous avons besoin d’un développeur expérimenté pour faire encore plus progresser notre plateforme.</p><ul><li><p>Vous contribuerez à implémenter des technologies cloud sophistiquées</p></li><li><p>Votre curiosité et votre autonomie vous permettront d’être une force de proposition</p></li><li><p>Grâce à notre stack simplificateur votre code sera “lean” et vous aurez la satisfaction d’obtenir une productivité maximale</p></li></ul><p>L’opportunité de réaliser une plateforme cloud universelle n’est pas donné à tout le monde, venez rejoindre l’univers Basikon pour inventer la plateforme financière de demain !</p>",
+    "domain": "welcometothejungle",
+    "education_requirement": "postgraduate degree",
     "industry_tags": [
-      "Cybersecurity",
-      "Internet intelligence",
-      "Software"
+      "Logiciels",
+      "Finance"
     ],
-    "job_type": "Unknown",
-    "location": "Remote (US/Canada)",
+    "job_type": "Full-time",
     "locations": [
-      "United States",
-      "Canada"
+      "Paris, FR"
     ],
     "parsed": true,
-    "qualifications": "What You'll Bring\n\n3+ years of software engineering experience with strong depth in React and TypeScript\nProven ability to drive epic-level frontend work end-to-end\nStrong testing discipline: unit, integration, and end-to-end coverage\nSolid accessibility fundamentals: WCAG standards, semantic HTML, keyboard navigation, and screen reader compatibility\nSystem-level thinking for frontend: component architecture, state management, data-fetching patterns, and performance tradeoffs\nCollaborative approach to working with Design and Product on future projects\nStrong opinions loosely held\n\nWhat Sets You Apart\n\nExperience building or contributing to a shared component library or design system\nFamiliarity with backend APIs — you can read service contracts, have an informed conversation with backend engineers, and understand what's feasible\nExperience with Remix or other server-rendered React frameworks\nSecurity domain experience or genuine interest in the security intelligence space\nData visualization or complex table/grid UI work at scale",
-    "remote": true,
-    "skills": [
-      "React",
-      "TypeScript",
-      "Remix",
-      "Frontend engineering",
-      "Unit testing",
-      "Integration testing",
-      "End-to-end testing",
-      "WCAG standards",
-      "Semantic HTML",
-      "Keyboard navigation",
-      "Screen reader compatibility",
-      "Component architecture",
-      "State management",
-      "Data-fetching patterns",
-      "Performance optimization",
-      "Backend APIs",
-      "Design systems",
-      "Data visualization",
-      "Complex table/grid UI"
-    ],
-    "title": "Fronted Engineer",
-    "url": "",
-    "warnings": [
-      "Imported by AI from pasted text - check the details against the original post."
-    ],
-    "years_experience_min": 3
+    "qualifications": "Vous êtes une personne passionnée et avez commencé à développer par vous même avant de rejoindre votre école ; vous avez déjà une expérience professionnelle de plusieurs années.",
+    "title": "Développeur JS Full-Stack Senior",
+    "url": "https://www.welcometothejungle.com/fr/companies/basikon/jobs/developpeur-js-full-stack-it-ops-senior",
+    "valid_through": "2026-11-23T15:03:31.000Z",
+    "warnings": []
   }
 }

@@ -4,6 +4,7 @@
     "type": "base",
     "template": "Xevier_T_CV_en.template.docx"
   },
+  "summary": "Senior Full-Stack and AI Developer with 6 years of experience building SaaS products and AI platforms using TypeScript, React, Node.js, PostgreSQL, and modern LLM technologies. Experienced in software architecture, RAG and multi-agent systems, and leading small engineering teams from design through production.",
   "experience": [
     {
       "company": "StealthX",
@@ -38,30 +39,12 @@
       ]
     },
     {
-      "company": "Artificial Compute",
-      "location": "Remote",
-      "title": "Front-end Developer",
-      "dates": "June 2023 - July 2024",
+      "company": "Artificial Compute · Rodeo Logistics · DevWorks",
+      "location": "",
+      "title": "Front-End Developer · Full-Stack Developer · Full-Stack Developer / Project Lead",
+      "dates": "2021-2024",
       "bullets": [
-        "Developed Next.js/React/Redux features that increased user engagement by 30%."
-      ]
-    },
-    {
-      "company": "Rodeo Logistics, LLC",
-      "location": "Austin, TX - Remote",
-      "title": "Full-Stack Developer",
-      "dates": "December 2021 - February 2023",
-      "bullets": [
-        "Built React, TypeScript, GraphQL, and Node.js business tools to modernize logistics operations."
-      ]
-    },
-    {
-      "company": "DevWorks",
-      "location": "Austin, TX",
-      "title": "Full-Stack Developer / Project Lead",
-      "dates": "March 2021 - December 2021",
-      "bullets": [
-        "Coordinated software projects and development teams, achieving a 95% on-time delivery rate."
+        "Built React, Next.js, TypeScript, Node.js, GraphQL, and Redux applications across SaaS and logistics products, while also leading development projects and small engineering teams."
       ]
     }
   ],

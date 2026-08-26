@@ -17,7 +17,7 @@ Build a local resume-tailoring workflow that captures job posts, analyzes ATS-re
 - Do not edit `resume/content/base.en.json` or `resume/content/base.fr.json` for a single job application.
 - Job-specific edits must be written as variants under `resume/variants/`.
 - DOCX layout is locked. Header/contact details, section headings, and education/formation must not change during tailoring.
-- The AI tailoring layer may rewrite only experience bullets and skills strings unless the user explicitly expands scope.
+- The AI tailoring layer may rewrite only the professional summary, experience bullets, and skills strings unless the user explicitly expands scope.
 - Never add unsupported credentials, tools, employers, metrics, responsibilities, certifications, or education. Unsupported high-value ATS terms belong in a report, not in the resume.
 - The ATS score is measured, never reported by a model. `src-tauri/src/ats_score.rs` computes it from the generated document; the model's `estimated_ats_coverage_score` is advisory only and must not be used to drive logic or shown as the headline number.
 - The evidence preflight and the ATS scorer must build their term ledger from the same `evidence::analysis_candidates`. If they diverge, the app asks the user to confirm one set of terms while scoring another.

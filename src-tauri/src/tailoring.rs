@@ -450,7 +450,7 @@ pub fn build_tailoring_prompt(
     format!(
         "Tailor this {language} resume JSON for maximum truthful ATS alignment.\n\
          Return only JSON matching the schema. Preserve the input resume shape exactly.\n\
-         Rewrite only experience bullet text and skills strings.\n\
+         Rewrite only the professional summary, experience bullet text, and skills strings.\n\
          Do not change meta, company names, locations, titles, dates, job order, number of jobs, number of bullets, or skill keys.\n\
          Aggressively incorporate ATS keywords, tools, responsibility phrases, and domain wording when the base resume supports them.\n\
          Applicant tracking systems match literal strings, so write each supported term the way this job post writes it. The analysis term_variants list gives the alternate written forms; when an acronym and its expansion are both in common use, name both once in the skills line where it reads naturally, and use the post's own form in bullets.\n\
@@ -459,7 +459,8 @@ pub fn build_tailoring_prompt(
          User-attested evidence may support a skills string. Use it in an experience bullet only when its proof_note explicitly names a matching role or project or allow_model_role_placement is true; never infer a responsibility from any other term alone.\n\
          {invention_rule}\
          Put important job keywords without base-resume or user-attested evidence into omitted_unsupported_keywords instead of adding them to the resume.\n\
-         Keep each rewritten bullet close to the original length so the locked DOCX layout remains stable.\n\n\
+         Keep each rewritten bullet close to the original length so the locked DOCX layout remains stable.\n\
+         Keep the professional summary to the same sentence count and approximate length as the original, leading with the job's own role wording and its highest-weighted supported terms.\n\n\
          Normalized job JSON:\n{parsed_job}\n\n\
          ATS analysis JSON:\n{analysis}\n\n\
          Base resume JSON:\n{base_resume}\n\n\
@@ -475,8 +476,9 @@ fn resume_content_schema() -> serde_json::Value {
     serde_json::json!({
         "type": "object",
         "additionalProperties": false,
-        "required": ["meta", "experience", "skills"],
+        "required": ["meta", "summary", "experience", "skills"],
         "properties": {
+            "summary": { "type": "string" },
             "meta": {
                 "type": "object",
                 "additionalProperties": false,
@@ -705,6 +707,15 @@ pub fn validate_tailored_content(
     }
     if base["meta"]["template"] != tailored["meta"]["template"] {
         return invalid("meta.template changed");
+    }
+
+    if tailored["summary"]
+        .as_str()
+        .map(str::trim)
+        .map(str::is_empty)
+        .unwrap_or(true)
+    {
+        return invalid("summary is empty");
     }
 
     let base_experience = base["experience"]
@@ -1029,6 +1040,19 @@ pub(crate) fn content_changes(
     tailored: &serde_json::Value,
 ) -> Vec<ContentChange> {
     let mut changes = Vec::new();
+
+    // Not `.expect()` like the rest of this function: recovery from artifacts replays a
+    // `variant.json` that may have been written before the summary field existed.
+    if let (Some(before), Some(after)) = (base["summary"].as_str(), tailored["summary"].as_str()) {
+        if before != after {
+            changes.push(ContentChange {
+                path: "/summary".to_string(),
+                before: before.to_string(),
+                after: after.to_string(),
+            });
+        }
+    }
+
     let base_experience = base["experience"]
         .as_array()
         .expect("validated base experience");
@@ -2271,6 +2295,7 @@ mod tests {
     fn base_resume() -> serde_json::Value {
         json!({
             "meta": { "language": "en", "type": "base", "template": "Xevier_T_CV_en.template.docx" },
+            "summary": "Engineer with six years building reliable backend services.",
             "experience": [{
                 "company": "Acme",
                 "location": "Remote",
@@ -2293,6 +2318,7 @@ mod tests {
     fn multi_role_base_resume() -> serde_json::Value {
         json!({
             "meta": { "language": "en", "type": "base", "template": "Xevier_T_CV_en.template.docx" },
+            "summary": "Engineer with six years building reliable backend services.",
             "experience": [
                 {
                     "company": "Acme",
@@ -2628,7 +2654,9 @@ mod tests {
             None,
         );
 
-        assert!(prompt.contains("Rewrite only experience bullet text and skills strings"));
+        assert!(prompt.contains(
+            "Rewrite only the professional summary, experience bullet text, and skills strings"
+        ));
         assert!(prompt.contains("Do not invent"));
         assert!(prompt.contains("omitted_unsupported_keywords"));
         assert!(prompt.contains("Rust Engineer"));
@@ -2809,17 +2837,49 @@ mod tests {
     fn content_change_list_only_includes_editable_changed_values() {
         let base = base_resume();
         let mut tailored = base.clone();
+        tailored["summary"] = json!("Rust engineer with six years building reliable APIs.");
         tailored["experience"][0]["bullets"][0] = json!("Built reliable Rust APIs.");
         tailored["skills"]["architecture_backend"] =
             json!("Architecture & Backend: Rust, API Design");
 
         let changes = content_changes(&base, &tailored);
 
-        assert_eq!(changes.len(), 2);
-        assert_eq!(changes[0].path, "/experience/0/bullets/0");
-        assert_eq!(changes[0].before, "Built APIs.");
-        assert_eq!(changes[0].after, "Built reliable Rust APIs.");
-        assert_eq!(changes[1].path, "/skills/architecture_backend");
+        assert_eq!(changes.len(), 3);
+        assert_eq!(changes[0].path, "/summary");
+        assert_eq!(
+            changes[0].after,
+            "Rust engineer with six years building reliable APIs."
+        );
+        assert_eq!(changes[1].path, "/experience/0/bullets/0");
+        assert_eq!(changes[1].before, "Built APIs.");
+        assert_eq!(changes[1].after, "Built reliable Rust APIs.");
+        assert_eq!(changes[2].path, "/skills/architecture_backend");
+    }
+
+    #[test]
+    fn an_untouched_summary_is_not_reported_as_a_change() {
+        let base = base_resume();
+        let mut tailored = base.clone();
+        tailored["experience"][0]["bullets"][0] = json!("Built reliable Rust APIs.");
+
+        let changes = content_changes(&base, &tailored);
+
+        assert!(changes.iter().all(|change| change.path != "/summary"));
+    }
+
+    /// A variant archived before the summary existed still has to diff without panicking.
+    #[test]
+    fn a_legacy_variant_without_a_summary_still_diffs() {
+        let mut base = base_resume();
+        let mut tailored = base.clone();
+        base.as_object_mut().unwrap().remove("summary");
+        tailored.as_object_mut().unwrap().remove("summary");
+        tailored["skills"]["frontend"] = json!("Frontend: React, Redux");
+
+        let changes = content_changes(&base, &tailored);
+
+        assert_eq!(changes.len(), 1);
+        assert_eq!(changes[0].path, "/skills/frontend");
     }
 
     #[test]
@@ -2831,6 +2891,17 @@ mod tests {
             json!("Architecture & Backend: Rust, API Design, Axum");
 
         validate_tailored_content("en", &base, &tailored).unwrap();
+    }
+
+    #[test]
+    fn validation_rejects_an_empty_summary() {
+        let base = base_resume();
+        let mut tailored = base.clone();
+        tailored["summary"] = json!("   ");
+
+        let err = validate_tailored_content("en", &base, &tailored).unwrap_err();
+
+        assert!(err.to_string().contains("summary is empty"));
     }
 
     fn high_emphasis_tailored_resume(

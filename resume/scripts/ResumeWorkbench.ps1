@@ -27,30 +27,30 @@ $Config = @{
     template = 'Xevier_T_CV_en.template.docx'
     generated = 'Xevier_T_CV_en.generated.docx'
     editable = @{
-      3='experience.0.company_line'; 4='experience.0.title_line'; 5='experience.0.bullets.0'; 6='experience.0.bullets.1'; 7='experience.0.bullets.2'; 8='experience.0.bullets.3'
-      9='experience.1.company_line'; 10='experience.1.title_line'; 11='experience.1.bullets.0'; 12='experience.1.bullets.1'
-      13='experience.2.company_line'; 14='experience.2.title_line'; 15='experience.2.bullets.0'; 16='experience.2.bullets.1'
-      17='experience.3.company_line'; 18='experience.3.title_line'; 19='experience.3.bullets.0'
-      20='experience.4.company_line'; 21='experience.4.title_line'; 22='experience.4.bullets.0'
-      23='experience.5.company_line'; 24='experience.5.title_line'; 25='experience.5.bullets.0'
-      31='skills.frontend'; 32='skills.architecture_backend'; 33='skills.ai_data'; 34='skills.testing'; 35='skills.devops'; 36='skills.tools'
+      2='summary'
+      4='experience.0.company_line'; 5='experience.0.title_line'; 6='experience.0.bullets.0'; 7='experience.0.bullets.1'; 8='experience.0.bullets.2'; 9='experience.0.bullets.3'
+      10='experience.1.company_line'; 11='experience.1.title_line'; 12='experience.1.bullets.0'; 13='experience.1.bullets.1'
+      14='experience.2.company_line'; 15='experience.2.title_line'; 16='experience.2.bullets.0'; 17='experience.2.bullets.1'
+      19='experience.3.bullets.0'
+      25='skills.frontend'; 26='skills.architecture_backend'; 27='skills.ai_data'; 28='skills.testing'; 29='skills.devops'; 30='skills.tools'
     }
-    locked = @{ header=@(0,1); section_headings=@(2,26,30); education=@(27,28,29) }
+    locked = @{ header=@(0,1); section_headings=@(3,20,24); education=@(21,22,23); earlier_experience=@(18) }
+    locked_experience_headers = @(3)
   }
   fr = @{
     source = 'Xevier_T_CV_fr.docx'
     template = 'Xevier_T_CV_fr.template.docx'
     generated = 'Xevier_T_CV_fr.generated.docx'
     editable = @{
-      3='experience.0.company_line'; 4='experience.0.title_line'; 5='experience.0.bullets.0'; 6='experience.0.bullets.1'; 7='experience.0.bullets.2'
-      8='experience.1.company_line'; 9='experience.1.title_line'; 10='experience.1.bullets.0'; 11='experience.1.bullets.1'
-      12='experience.2.company_line'; 13='experience.2.title_line'; 14='experience.2.bullets.0'; 15='experience.2.bullets.1'
-      16='experience.3.company_line'; 17='experience.3.title_line'; 18='experience.3.bullets.0'
-      19='experience.4.company_line'; 20='experience.4.title_line'; 21='experience.4.bullets.0'
-      22='experience.5.company_line'; 23='experience.5.title_line'; 24='experience.5.bullets.0'
-      30='skills.frontend'; 31='skills.architecture_backend'; 32='skills.ai_data'; 33='skills.testing'; 34='skills.devops'; 35='skills.tools'
+      2='summary'
+      4='experience.0.company_line'; 5='experience.0.title_line'; 6='experience.0.bullets.0'; 7='experience.0.bullets.1'; 8='experience.0.bullets.2'
+      9='experience.1.company_line'; 10='experience.1.title_line'; 11='experience.1.bullets.0'; 12='experience.1.bullets.1'
+      13='experience.2.company_line'; 14='experience.2.title_line'; 15='experience.2.bullets.0'; 16='experience.2.bullets.1'
+      18='experience.3.bullets.0'
+      24='skills.frontend'; 25='skills.architecture_backend'; 26='skills.ai_data'; 27='skills.testing'; 28='skills.devops'; 29='skills.tools'
     }
-    locked = @{ header=@(0,1); section_headings=@(2,25,29); education=@(26,27,28) }
+    locked = @{ header=@(0,1); section_headings=@(3,19,23); education=@(20,21,22); earlier_experience=@(17) }
+    locked_experience_headers = @(3)
   }
 }
 
@@ -216,7 +216,7 @@ function Get-LockedSnapshot([string]$LangCode, [string]$DocxPath) {
     $ns = New-NsManager $xml
     $paragraphs = Get-NonEmptyParagraphs $xml $ns
     $out = [ordered]@{}
-    foreach ($group in $Config[$LangCode].locked.Keys) {
+    foreach ($group in ($Config[$LangCode].locked.Keys | Sort-Object)) {
       $values = @()
       foreach ($idx in $Config[$LangCode].locked[$group]) { $values += (Get-Text $paragraphs[$idx] $ns) }
       $out[$group] = $values
@@ -264,15 +264,20 @@ function Get-PropertyValue($Obj, [string]$Name) {
   return $Obj.PSObject.Properties[$Name].Value
 }
 
-function Flatten-Content($Data) {
+function Flatten-Content($Data, [string]$LangCode) {
   $body = if ($Data.PSObject.Properties['content']) { $Data.content } else { $Data }
   $values = @{}
+  $values['summary'] = [string]$body.summary
+  # A consolidated role carries its own locked header, so only its bullets are rendered.
+  $lockedHeaders = @($Config[$LangCode].locked_experience_headers)
   for ($i = 0; $i -lt $body.experience.Count; $i++) {
     $job = $body.experience[$i]
-    $companyLine = if ($job.location) { "$($job.company)`t$($job.location)" } else { "$($job.company)" }
-    $titleLine = if ($job.dates) { "$($job.title)`t$($job.dates)" } else { "$($job.title)" }
-    $values["experience.$i.company_line"] = $companyLine
-    $values["experience.$i.title_line"] = $titleLine
+    if ($lockedHeaders -notcontains $i) {
+      $companyLine = if ($job.location) { "$($job.company)`t$($job.location)" } else { "$($job.company)" }
+      $titleLine = if ($job.dates) { "$($job.title)`t$($job.dates)" } else { "$($job.title)" }
+      $values["experience.$i.company_line"] = $companyLine
+      $values["experience.$i.title_line"] = $titleLine
+    }
     for ($j = 0; $j -lt $job.bullets.Count; $j++) {
       $values["experience.$i.bullets.$j"] = [string]$job.bullets[$j]
     }
@@ -432,7 +437,7 @@ function Render-Resume([string]$LangCode, [string]$ContentPath, [string]$OutPath
   if (!$OutPath) { $OutPath = Join-Path $Generated $cfg.generated }
   $template = Join-Path $Templates $cfg.template
   $data = Get-Content -Raw -Encoding UTF8 $ContentPath | ConvertFrom-Json
-  $values = Flatten-Content $data
+  $values = Flatten-Content $data $LangCode
   $tmp = Join-Path ([System.IO.Path]::GetTempPath()) ("resume_render_" + [guid]::NewGuid())
   Expand-Docx $template $tmp
   try {
@@ -475,7 +480,7 @@ function Get-TaggedEditableValues([string]$DocxPath) {
       foreach ($candidate in $sdt.GetElementsByTagName('tag', $WNs)) { $tagNode = $candidate; break }
       if ($null -eq $tagNode) { continue }
       $tag = $tagNode.GetAttribute('val', $WNs)
-      if ($tag -notmatch '^experience\.\d+\.bullets\.\d+$' -and $tag -notmatch '^skills\.') { continue }
+      if ($tag -ne 'summary' -and $tag -notmatch '^experience\.\d+\.bullets\.\d+$' -and $tag -notmatch '^skills\.') { continue }
       $text = New-Object System.Text.StringBuilder
       foreach ($node in $sdt.GetElementsByTagName('t', $WNs)) { [void]$text.Append($node.InnerText) }
       $values[$tag] = $text.ToString()
@@ -496,11 +501,11 @@ function Validate-Resume([string]$LangCode, [string]$DocxPath, [string]$ContentP
 
   if ($ContentPath) {
     $contentData = Get-Content -Raw -Encoding UTF8 $ContentPath | ConvertFrom-Json
-    $expectedEditable = Flatten-Content $contentData
+    $expectedEditable = Flatten-Content $contentData $LangCode
     $actualEditable = Get-TaggedEditableValues $DocxPath
     $checked = 0
     foreach ($tag in @($expectedEditable.Keys | Sort-Object)) {
-      if ($tag -notmatch '^experience\.\d+\.bullets\.\d+$' -and $tag -notmatch '^skills\.') { continue }
+      if ($tag -ne 'summary' -and $tag -notmatch '^experience\.\d+\.bullets\.\d+$' -and $tag -notmatch '^skills\.') { continue }
       if (!$actualEditable.ContainsKey($tag)) { throw "Rendered DOCX is missing editable field: $tag" }
       if ([string]$expectedEditable[$tag] -cne [string]$actualEditable[$tag]) {
         throw "Rendered DOCX content does not match variant JSON for: $tag"

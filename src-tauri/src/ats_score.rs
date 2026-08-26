@@ -110,6 +110,14 @@ pub fn load_locked_sections(
 fn regions(content: &serde_json::Value, locked: Option<&serde_json::Value>) -> Vec<Region> {
     let mut regions = Vec::new();
 
+    if let Some(text) = content["summary"].as_str() {
+        regions.push(Region {
+            path: "summary".to_string(),
+            tokens: token_set(text),
+            editable: true,
+        });
+    }
+
     for (job_index, job) in content["experience"]
         .as_array()
         .into_iter()
@@ -618,6 +626,23 @@ mod tests {
         // ...but tailoring did not put it there, so it must not read as tailoring work.
         assert!(!term.in_editable_surface);
         assert_eq!(coverage.editable_covered_weight, 0);
+    }
+
+    /// The summary is tailorable, so a term it carries is tailoring work, not locked text.
+    #[test]
+    fn a_term_found_only_in_the_summary_is_credited_to_tailoring() {
+        let mut job = analysis();
+        job.required_skills = vec!["GraphQL".into()];
+        let mut content = resume(&["Wrote documentation."], "Figma");
+        content["summary"] = serde_json::json!("Engineer building GraphQL platforms.");
+
+        let coverage = score_ats_coverage(&job, &content, None, &[]);
+
+        let term = &coverage.terms[0];
+        assert!(term.covered);
+        assert_eq!(term.matched_in.as_deref(), Some("summary"));
+        assert!(term.in_editable_surface);
+        assert!(coverage.editable_covered_weight > 0);
     }
 
     #[test]

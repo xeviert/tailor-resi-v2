@@ -2641,6 +2641,90 @@
       "kind": "technology",
       "user_attested": true,
       "allow_model_role_placement": false
+    },
+    {
+      "term": "Développement JavaScript",
+      "kind": "technology",
+      "user_attested": true,
+      "allow_model_role_placement": false
+    },
+    {
+      "term": "Développement client et serveur",
+      "kind": "technology",
+      "user_attested": true,
+      "allow_model_role_placement": false
+    },
+    {
+      "term": "Expérience professionnelle de plusieurs années",
+      "kind": "technology",
+      "user_attested": true,
+      "allow_model_role_placement": true
+    },
+    {
+      "term": "Technologies cloud",
+      "kind": "technology",
+      "user_attested": true,
+      "allow_model_role_placement": false
+    },
+    {
+      "term": "cloud native",
+      "kind": "technology",
+      "user_attested": true,
+      "allow_model_role_placement": false
+    },
+    {
+      "term": "implémentation de technologies cloud",
+      "kind": "responsibility",
+      "user_attested": true,
+      "allow_model_role_placement": true
+    },
+    {
+      "term": "low-code",
+      "kind": "technology",
+      "user_attested": true,
+      "allow_model_role_placement": false
+    },
+    {
+      "term": "plateforme cloud",
+      "kind": "technology",
+      "user_attested": true,
+      "allow_model_role_placement": false
+    },
+    {
+      "term": "plateforme de test",
+      "kind": "technology",
+      "user_attested": true,
+      "allow_model_role_placement": false
+    },
+    {
+      "term": "stack client et serveur",
+      "kind": "technology",
+      "user_attested": true,
+      "allow_model_role_placement": false
+    },
+    {
+      "term": "méthodologie agile",
+      "kind": "method_domain",
+      "user_attested": true,
+      "allow_model_role_placement": true
+    },
+    {
+      "term": "productivité de développement",
+      "kind": "responsibility",
+      "user_attested": true,
+      "allow_model_role_placement": true
+    },
+    {
+      "term": "autonomie",
+      "kind": "technology",
+      "user_attested": true,
+      "allow_model_role_placement": true
+    },
+    {
+      "term": "force de proposition",
+      "kind": "technology",
+      "user_attested": true,
+      "allow_model_role_placement": true
     }
   ]
 }

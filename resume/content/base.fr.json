@@ -4,6 +4,7 @@
     "type": "base",
     "template": "Xevier_T_CV_fr.template.docx"
   },
+  "summary": "Développeur Full-Stack et IA senior avec 6 ans d'expérience dans la conception de produits SaaS et de plateformes d'intelligence artificielle avec TypeScript, React, Node.js, PostgreSQL et les technologies LLM modernes. Expérience en architecture logicielle, systèmes RAG et multi-agents, ainsi qu'en encadrement de petites équipes techniques, de la conception jusqu'à la mise en production.",
   "experience": [
     {
       "company": "StealthX",
@@ -37,30 +38,12 @@
       ]
     },
     {
-      "company": "Artificial Compute",
-      "location": "Télétravail",
-      "title": "Développeur Front-end",
-      "dates": "Juin 2023 - Juillet 2024",
+      "company": "Artificial Compute · Rodeo Logistics · DevWorks",
+      "location": "",
+      "title": "Développeur Front-End · Développeur Full-Stack · Développeur Full-Stack / Chef de projet",
+      "dates": "2021-2024",
       "bullets": [
-        "Développement de fonctionnalités Next.js/React/Redux ayant augmenté l'engagement utilisateur de 30 %."
-      ]
-    },
-    {
-      "company": "Rodeo Logistics, LLC",
-      "location": "Austin, TX - Télétravail",
-      "title": "Développeur Full-Stack",
-      "dates": "Décembre 2021 - Février 2023",
-      "bullets": [
-        "Création d'outils métier React, TypeScript, GraphQL et Node.js pour moderniser les opérations logistiques."
-      ]
-    },
-    {
-      "company": "DevWorks",
-      "location": "Austin, TX",
-      "title": "Développeur Full-Stack / Chef de projet",
-      "dates": "Mars 2021 - Décembre 2021",
-      "bullets": [
-        "Coordination de projets logiciels et d'équipes de développement, avec 95 % de livraisons dans les délais."
+        "Développement d'applications avec React, Next.js, TypeScript, Node.js, GraphQL et Redux dans des environnements SaaS et logistiques, avec également des responsabilités en gestion de projets et coordination d'équipes de développement."
       ]
     }
   ],
