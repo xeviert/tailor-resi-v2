@@ -232,9 +232,10 @@ must stay out of the resume.
    merely navigating away.
 
    A verified employer-facing artifact is atomically published to the stable
-   `Downloads/Xevier_T_CV_<lang>.pdf` filename. If PDF output is not available
-   but a DOCX passed validation, the validated DOCX is published instead. Only one
-   of those two stable employer-facing files is kept per language. Each published
+   `Downloads/Xevier_T_CV.pdf` filename. If PDF output is not available
+   but a DOCX passed validation, the validated DOCX is published instead. The name
+   carries no language suffix, so an English and a French run share it: only one
+   stable employer-facing file is kept in Downloads at a time. Each published
    artifact gets an `artifact-manifest.json` provenance file in its variant
    directory.
 

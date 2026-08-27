@@ -176,7 +176,7 @@ describe('always-visible run summary', () => {
         variant_slug: 'test-company-role-en',
         format: 'pdf' as const,
         source_path: 'resume/variants/test-company-role-en/Xevier_T_CV_en.pdf',
-        downloads_path: 'C:/Users/Test/Downloads/Xevier_T_CV_en.pdf',
+        downloads_path: 'C:/Users/Test/Downloads/Xevier_T_CV.pdf',
         sha256: 'abc123',
         manifest_path: 'resume/variants/test-company-role-en/artifact-manifest.json',
         verification_status: 'verified',

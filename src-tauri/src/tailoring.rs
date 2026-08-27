@@ -1615,7 +1615,7 @@ fn downloads_file_path(language: &str, extension: &str) -> Result<PathBuf, Tailo
         })?;
     Ok(PathBuf::from(home)
         .join("Downloads")
-        .join(format!("Xevier_T_CV_{language}.{extension}")))
+        .join(format!("Xevier_T_CV.{extension}")))
 }
 
 fn downloads_file_path_in(
@@ -1626,7 +1626,7 @@ fn downloads_file_path_in(
     match downloads_directory {
         Some(directory) => {
             validate_language(language)?;
-            Ok(directory.join(format!("Xevier_T_CV_{language}.{extension}")))
+            Ok(directory.join(format!("Xevier_T_CV.{extension}")))
         }
         None => downloads_file_path(language, extension),
     }
@@ -4022,8 +4022,8 @@ mod tests {
         let docx = variant_dir.join("Xevier_T_CV_en.docx");
         std::fs::write(&variant_json, serde_json::to_vec(&base_resume()).unwrap()).unwrap();
         std::fs::write(&docx, b"validated tailored docx").unwrap();
-        std::fs::write(downloads.join("Xevier_T_CV_en.docx"), b"stale base docx").unwrap();
-        std::fs::write(downloads.join("Xevier_T_CV_en.pdf"), b"stale prior pdf").unwrap();
+        std::fs::write(downloads.join("Xevier_T_CV.docx"), b"stale base docx").unwrap();
+        std::fs::write(downloads.join("Xevier_T_CV.pdf"), b"stale prior pdf").unwrap();
 
         let artifact = publish_verified_artifact(
             &root,
@@ -4040,12 +4040,12 @@ mod tests {
         )
         .unwrap();
 
-        let published = downloads.join("Xevier_T_CV_en.docx");
+        let published = downloads.join("Xevier_T_CV.docx");
         assert_eq!(
             std::fs::read(&published).unwrap(),
             b"validated tailored docx"
         );
-        assert!(!downloads.join("Xevier_T_CV_en.pdf").exists());
+        assert!(!downloads.join("Xevier_T_CV.pdf").exists());
         assert_eq!(artifact.sha256, sha256_file(&published).unwrap());
         assert!(variant_dir.join("artifact-manifest.json").is_file());
         std::fs::remove_dir_all(root).unwrap();
@@ -4068,8 +4068,8 @@ mod tests {
         std::fs::write(&variant_json, serde_json::to_vec(&base_resume()).unwrap()).unwrap();
         std::fs::write(&docx, b"validated tailored docx").unwrap();
         std::fs::write(&pdf, b"one-page tailored pdf").unwrap();
-        std::fs::write(downloads.join("Xevier_T_CV_en.docx"), b"stale prior docx").unwrap();
-        std::fs::write(downloads.join("Xevier_T_CV_en.pdf"), b"stale base pdf").unwrap();
+        std::fs::write(downloads.join("Xevier_T_CV.docx"), b"stale prior docx").unwrap();
+        std::fs::write(downloads.join("Xevier_T_CV.pdf"), b"stale base pdf").unwrap();
 
         let artifact = publish_verified_artifact(
             &root,
@@ -4086,10 +4086,63 @@ mod tests {
         )
         .unwrap();
 
-        let published = downloads.join("Xevier_T_CV_en.pdf");
+        let published = downloads.join("Xevier_T_CV.pdf");
         assert_eq!(std::fs::read(&published).unwrap(), b"one-page tailored pdf");
-        assert!(!downloads.join("Xevier_T_CV_en.docx").exists());
+        assert!(!downloads.join("Xevier_T_CV.docx").exists());
         assert_eq!(artifact.sha256, sha256_file(&published).unwrap());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn french_publish_overwrites_the_single_english_downloads_copy() {
+        let suffix = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("resume-shared-name-publish-{suffix}"));
+        let downloads = root.join("Downloads");
+        std::fs::create_dir_all(&downloads).unwrap();
+
+        let mut published_paths = Vec::new();
+        for (language, bytes) in [
+            ("en", &b"english one-page pdf"[..]),
+            ("fr", &b"french one-page pdf"[..]),
+        ] {
+            let variant_slug = format!("test-{language}");
+            let variant_dir = root.join("resume/variants").join(&variant_slug);
+            std::fs::create_dir_all(&variant_dir).unwrap();
+            let variant_json = variant_dir.join("variant.json");
+            let docx = variant_dir.join(format!("Xevier_T_CV_{language}.docx"));
+            let pdf = variant_dir.join(format!("Xevier_T_CV_{language}.pdf"));
+            std::fs::write(&variant_json, serde_json::to_vec(&base_resume()).unwrap()).unwrap();
+            std::fs::write(&docx, b"validated tailored docx").unwrap();
+            std::fs::write(&pdf, bytes).unwrap();
+
+            let artifact = publish_verified_artifact(
+                &root,
+                &variant_slug,
+                &pdf,
+                language,
+                "pdf",
+                &variant_json,
+                &docx,
+                Some(&pdf),
+                "passed",
+                "passed",
+                Some(&downloads),
+            )
+            .unwrap();
+            published_paths.push(artifact.downloads_path);
+        }
+
+        assert_eq!(published_paths[0], published_paths[1]);
+        let published = downloads.join("Xevier_T_CV.pdf");
+        assert_eq!(std::fs::read(&published).unwrap(), b"french one-page pdf");
+        let names: Vec<String> = std::fs::read_dir(&downloads)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().to_string())
+            .collect();
+        assert_eq!(names, vec!["Xevier_T_CV.pdf".to_string()]);
         std::fs::remove_dir_all(root).unwrap();
     }
 }
