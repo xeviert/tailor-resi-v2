@@ -239,7 +239,7 @@
       "term": "Redis",
       "kind": "technology",
       "user_attested": true,
-      "allow_model_role_placement": false
+      "allow_model_role_placement": true
     },
     {
       "term": "Review code and challenge design decisions",
@@ -263,7 +263,7 @@
       "term": "cross-functional collaboration",
       "kind": "method_domain",
       "user_attested": true,
-      "allow_model_role_placement": false
+      "allow_model_role_placement": true
     },
     {
       "term": "secure coding",
@@ -1031,13 +1031,13 @@
       "term": "NodeJs",
       "kind": "technology",
       "user_attested": true,
-      "allow_model_role_placement": false
+      "allow_model_role_placement": true
     },
     {
       "term": "ReactJS",
       "kind": "technology",
       "user_attested": true,
-      "allow_model_role_placement": false
+      "allow_model_role_placement": true
     },
     {
       "term": "Svelte",
@@ -1055,7 +1055,7 @@
       "term": "Vue.js",
       "kind": "technology",
       "user_attested": true,
-      "allow_model_role_placement": false
+      "allow_model_role_placement": true
     },
     {
       "term": "5+ years backend experience",
@@ -1151,7 +1151,7 @@
       "term": "Sentry",
       "kind": "technology",
       "user_attested": true,
-      "allow_model_role_placement": false
+      "allow_model_role_placement": true
     },
     {
       "term": "Architecture logicielle",
@@ -1161,9 +1161,9 @@
     },
     {
       "term": "Bases de données relationnelles",
-      "kind": "technology",
+      "kind": "method_domain",
       "user_attested": true,
-      "allow_model_role_placement": false
+      "allow_model_role_placement": true
     },
     {
       "term": "Développement back-end",
@@ -1175,7 +1175,7 @@
       "term": "Développement front-end",
       "kind": "method_domain",
       "user_attested": true,
-      "allow_model_role_placement": false
+      "allow_model_role_placement": true
     },
     {
       "term": "Développement fullstack",
@@ -1193,7 +1193,7 @@
       "term": "Tests automatisés",
       "kind": "method_domain",
       "user_attested": true,
-      "allow_model_role_placement": false
+      "allow_model_role_placement": true
     },
     {
       "term": "SQL",
@@ -1325,7 +1325,7 @@
       "term": "Design patterns",
       "kind": "responsibility",
       "user_attested": true,
-      "allow_model_role_placement": false
+      "allow_model_role_placement": true
     },
     {
       "term": "Feature development",
@@ -1415,7 +1415,7 @@
       "term": "CI/CD pipelines",
       "kind": "technology",
       "user_attested": true,
-      "allow_model_role_placement": false
+      "allow_model_role_placement": true
     },
     {
       "term": "Code review facilitation combined with mentoring and knowledge sharing",
@@ -1481,7 +1481,7 @@
       "term": "Vite",
       "kind": "technology",
       "user_attested": true,
-      "allow_model_role_placement": false
+      "allow_model_role_placement": true
     },
     {
       "term": "7+ years",
@@ -1572,13 +1572,13 @@
       "term": "Independent work",
       "kind": "technology",
       "user_attested": true,
-      "allow_model_role_placement": false
+      "allow_model_role_placement": true
     },
     {
       "term": "MongoDB",
       "kind": "technology",
       "user_attested": true,
-      "allow_model_role_placement": false
+      "allow_model_role_placement": true
     },
     {
       "term": "Web application development",
@@ -1698,7 +1698,7 @@
       "term": "Choix techniques",
       "kind": "responsibility",
       "user_attested": true,
-      "allow_model_role_placement": false
+      "allow_model_role_placement": true
     },
     {
       "term": "DevOps : CI/CD, cloud, déploiement, monitoring, infrastructure, Docker",
@@ -1848,7 +1848,7 @@
       "term": "Refactoring",
       "kind": "technology",
       "user_attested": true,
-      "allow_model_role_placement": false
+      "allow_model_role_placement": true
     },
     {
       "term": "Scalable software design",
@@ -1872,25 +1872,25 @@
       "term": "Claude Code",
       "kind": "technology",
       "user_attested": true,
-      "allow_model_role_placement": false
+      "allow_model_role_placement": true
     },
     {
       "term": "Codex",
       "kind": "technology",
       "user_attested": true,
-      "allow_model_role_placement": false
+      "allow_model_role_placement": true
     },
     {
       "term": "Cursor",
       "kind": "technology",
       "user_attested": true,
-      "allow_model_role_placement": false
+      "allow_model_role_placement": true
     },
     {
       "term": "Nest.js",
       "kind": "technology",
       "user_attested": true,
-      "allow_model_role_placement": false
+      "allow_model_role_placement": true
     },
     {
       "term": "5+ years of full-stack development",
@@ -1956,19 +1956,19 @@
       "term": "Au moins 4 ans d’expérience en tant que développeur",
       "kind": "technology",
       "user_attested": true,
-      "allow_model_role_placement": false
+      "allow_model_role_placement": true
     },
     {
       "term": "Code maintenable et scalable",
       "kind": "technology",
       "user_attested": true,
-      "allow_model_role_placement": false
+      "allow_model_role_placement": true
     },
     {
       "term": "Collaboration avec Product Managers, designers et développeurs",
-      "kind": "method_domain",
+      "kind": "responsibility",
       "user_attested": true,
-      "allow_model_role_placement": false
+      "allow_model_role_placement": true
     },
     {
       "term": "Compréhension des enjeux métiers",
@@ -1990,21 +1990,21 @@
     },
     {
       "term": "Participation aux choix techniques",
-      "kind": "technology",
+      "kind": "responsibility",
       "user_attested": true,
-      "allow_model_role_placement": false
+      "allow_model_role_placement": true
     },
     {
       "term": "Réflexions d’architecture",
       "kind": "responsibility",
       "user_attested": true,
-      "allow_model_role_placement": false
+      "allow_model_role_placement": true
     },
     {
       "term": "React Native",
       "kind": "technology",
       "user_attested": true,
-      "allow_model_role_placement": false
+      "allow_model_role_placement": true
     },
     {
       "term": "Angular / Vue.Js / React",
@@ -2154,7 +2154,7 @@
       "term": "Tests e2e",
       "kind": "technology",
       "user_attested": true,
-      "allow_model_role_placement": false
+      "allow_model_role_placement": true
     },
     {
       "term": "shadCN",
@@ -2400,13 +2400,13 @@
       "term": "HTML / CSS",
       "kind": "technology",
       "user_attested": true,
-      "allow_model_role_placement": false
+      "allow_model_role_placement": true
     },
     {
       "term": "Performance web",
       "kind": "method_domain",
       "user_attested": true,
-      "allow_model_role_placement": false
+      "allow_model_role_placement": true
     },
     {
       "term": "Visualisation de données",
@@ -2458,9 +2458,9 @@
     },
     {
       "term": "Couverture de tests d’intégration",
-      "kind": "technology",
+      "kind": "responsibility",
       "user_attested": true,
-      "allow_model_role_placement": false
+      "allow_model_role_placement": true
     },
     {
       "term": "Couverture de tests unitaires",
@@ -2524,9 +2524,9 @@
     },
     {
       "term": "Tests unitaires, d’intégration et end-to-end",
-      "kind": "method_domain",
+      "kind": "responsibility",
       "user_attested": true,
-      "allow_model_role_placement": false
+      "allow_model_role_placement": true
     },
     {
       "term": "Travail frontend epic-level de bout en bout",
@@ -2644,7 +2644,7 @@
     },
     {
       "term": "Développement JavaScript",
-      "kind": "technology",
+      "kind": "method_domain",
       "user_attested": true,
       "allow_model_role_placement": true
     },
@@ -2662,7 +2662,7 @@
     },
     {
       "term": "Technologies cloud",
-      "kind": "technology",
+      "kind": "method_domain",
       "user_attested": true,
       "allow_model_role_placement": true
     },
@@ -2722,6 +2722,456 @@
     },
     {
       "term": "force de proposition",
+      "kind": "technology",
+      "user_attested": true,
+      "allow_model_role_placement": true
+    },
+    {
+      "term": "4 ans d’expérience minimum",
+      "kind": "technology",
+      "user_attested": true,
+      "allow_model_role_placement": true
+    },
+    {
+      "term": "Angular, ReactJS ou VueJS",
+      "kind": "technology",
+      "user_attested": true,
+      "allow_model_role_placement": true
+    },
+    {
+      "term": "Bootstrap",
+      "kind": "technology",
+      "user_attested": true,
+      "allow_model_role_placement": true
+    },
+    {
+      "term": "ES6+",
+      "kind": "technology",
+      "user_attested": true,
+      "allow_model_role_placement": true
+    },
+    {
+      "term": "NodeJS ou ExpressJS",
+      "kind": "technology",
+      "user_attested": true,
+      "allow_model_role_placement": true
+    },
+    {
+      "term": "Optimisation des performances",
+      "kind": "responsibility",
+      "user_attested": true,
+      "allow_model_role_placement": true
+    },
+    {
+      "term": "Programmation orientée objet",
+      "kind": "method_domain",
+      "user_attested": true,
+      "allow_model_role_placement": true
+    },
+    {
+      "term": "SASS",
+      "kind": "technology",
+      "user_attested": true,
+      "allow_model_role_placement": true
+    },
+    {
+      "term": "Twailind",
+      "kind": "technology",
+      "user_attested": true,
+      "allow_model_role_placement": true
+    },
+    {
+      "term": "Webpack",
+      "kind": "technology",
+      "user_attested": true,
+      "allow_model_role_placement": true
+    },
+    {
+      "term": "ExpressJS",
+      "kind": "technology",
+      "user_attested": true,
+      "allow_model_role_placement": true
+    },
+    {
+      "term": "Material UI",
+      "kind": "technology",
+      "user_attested": true,
+      "allow_model_role_placement": true
+    },
+    {
+      "term": "Prime",
+      "kind": "technology",
+      "user_attested": true,
+      "allow_model_role_placement": true
+    },
+    {
+      "term": "4-5 years of proven experience",
+      "kind": "technology",
+      "user_attested": true,
+      "allow_model_role_placement": true
+    },
+    {
+      "term": "API development and integration",
+      "kind": "responsibility",
+      "user_attested": true,
+      "allow_model_role_placement": true
+    },
+    {
+      "term": "API integration",
+      "kind": "technology",
+      "user_attested": true,
+      "allow_model_role_placement": true
+    },
+    {
+      "term": "Cloud services",
+      "kind": "technology",
+      "user_attested": true,
+      "allow_model_role_placement": true
+    },
+    {
+      "term": "Deployment methodologies",
+      "kind": "technology",
+      "user_attested": true,
+      "allow_model_role_placement": true
+    },
+    {
+      "term": "Development methodologies",
+      "kind": "technology",
+      "user_attested": true,
+      "allow_model_role_placement": true
+    },
+    {
+      "term": "English application materials",
+      "kind": "technology",
+      "user_attested": true,
+      "allow_model_role_placement": true
+    },
+    {
+      "term": "Frontend development",
+      "kind": "responsibility",
+      "user_attested": true,
+      "allow_model_role_placement": true
+    },
+    {
+      "term": "Google Cloud",
+      "kind": "technology",
+      "user_attested": true,
+      "allow_model_role_placement": true
+    },
+    {
+      "term": "HTML",
+      "kind": "technology",
+      "user_attested": true,
+      "allow_model_role_placement": true
+    },
+    {
+      "term": "Production-ready applications",
+      "kind": "technology",
+      "user_attested": true,
+      "allow_model_role_placement": true
+    },
+    {
+      "term": "SaaS services",
+      "kind": "method_domain",
+      "user_attested": true,
+      "allow_model_role_placement": true
+    },
+    {
+      "term": "Troubleshooting and debugging",
+      "kind": "technology",
+      "user_attested": true,
+      "allow_model_role_placement": true
+    },
+    {
+      "term": "Version control",
+      "kind": "technology",
+      "user_attested": true,
+      "allow_model_role_placement": true
+    },
+    {
+      "term": "application security",
+      "kind": "method_domain",
+      "user_attested": true,
+      "allow_model_role_placement": true
+    },
+    {
+      "term": "database management",
+      "kind": "responsibility",
+      "user_attested": true,
+      "allow_model_role_placement": true
+    },
+    {
+      "term": "server-side logic",
+      "kind": "responsibility",
+      "user_attested": true,
+      "allow_model_role_placement": true
+    },
+    {
+      "term": "user-facing web applications",
+      "kind": "responsibility",
+      "user_attested": true,
+      "allow_model_role_placement": true
+    },
+    {
+      "term": "Microsoft Azure",
+      "kind": "technology",
+      "user_attested": true,
+      "allow_model_role_placement": true
+    },
+    {
+      "term": "5 ans d’expérience en développement TypeScript ou JavaScript",
+      "kind": "technology",
+      "user_attested": true,
+      "allow_model_role_placement": true
+    },
+    {
+      "term": "Angular 18",
+      "kind": "technology",
+      "user_attested": true,
+      "allow_model_role_placement": true
+    },
+    {
+      "term": "Bases en optimisation du code",
+      "kind": "technology",
+      "user_attested": true,
+      "allow_model_role_placement": true
+    },
+    {
+      "term": "Choix d’architecture",
+      "kind": "responsibility",
+      "user_attested": true,
+      "allow_model_role_placement": true
+    },
+    {
+      "term": "Code clair et maintenable",
+      "kind": "technology",
+      "user_attested": true,
+      "allow_model_role_placement": true
+    },
+    {
+      "term": "Frameworks modernes",
+      "kind": "method_domain",
+      "user_attested": true,
+      "allow_model_role_placement": true
+    },
+    {
+      "term": "Node",
+      "kind": "technology",
+      "user_attested": true,
+      "allow_model_role_placement": true
+    },
+    {
+      "term": "Notions d’architecture technique",
+      "kind": "technology",
+      "user_attested": true,
+      "allow_model_role_placement": true
+    },
+    {
+      "term": "Partage de connaissances",
+      "kind": "technology",
+      "user_attested": true,
+      "allow_model_role_placement": true
+    },
+    {
+      "term": "Pédagogie",
+      "kind": "technology",
+      "user_attested": true,
+      "allow_model_role_placement": true
+    },
+    {
+      "term": "Respect des best practices",
+      "kind": "technology",
+      "user_attested": true,
+      "allow_model_role_placement": true
+    },
+    {
+      "term": "Travail en équipe",
+      "kind": "technology",
+      "user_attested": true,
+      "allow_model_role_placement": true
+    },
+    {
+      "term": "Micro-servicing",
+      "kind": "technology",
+      "user_attested": true,
+      "allow_model_role_placement": true
+    },
+    {
+      "term": "Outils AGILE",
+      "kind": "technology",
+      "user_attested": true,
+      "allow_model_role_placement": true
+    },
+    {
+      "term": "Scripts techniques",
+      "kind": "technology",
+      "user_attested": true,
+      "allow_model_role_placement": true
+    },
+    {
+      "term": "Vue",
+      "kind": "technology",
+      "user_attested": true,
+      "allow_model_role_placement": true
+    },
+    {
+      "term": "Amélioration continue",
+      "kind": "technology",
+      "user_attested": true,
+      "allow_model_role_placement": true
+    },
+    {
+      "term": "Développement de fonctionnalités",
+      "kind": "responsibility",
+      "user_attested": true,
+      "allow_model_role_placement": true
+    },
+    {
+      "term": "Développement logiciel",
+      "kind": "responsibility",
+      "user_attested": true,
+      "allow_model_role_placement": true
+    },
+    {
+      "term": "Enjeux métiers clients",
+      "kind": "responsibility",
+      "user_attested": true,
+      "allow_model_role_placement": true
+    },
+    {
+      "term": "Haut niveau de responsabilité",
+      "kind": "technology",
+      "user_attested": true,
+      "allow_model_role_placement": true
+    },
+    {
+      "term": "Utilisation de l’IA au quotidien",
+      "kind": "responsibility",
+      "user_attested": true,
+      "allow_model_role_placement": true
+    },
+    {
+      "term": "Utilisation de l’IA pour le développement",
+      "kind": "technology",
+      "user_attested": true,
+      "allow_model_role_placement": true
+    },
+    {
+      "term": "Monorepo",
+      "kind": "technology",
+      "user_attested": true,
+      "allow_model_role_placement": true
+    },
+    {
+      "term": "Applications web à fort trafic",
+      "kind": "method_domain",
+      "user_attested": true,
+      "allow_model_role_placement": true
+    },
+    {
+      "term": "Argumentation des choix techniques",
+      "kind": "technology",
+      "user_attested": true,
+      "allow_model_role_placement": true
+    },
+    {
+      "term": "Code maintenable et réutilisable",
+      "kind": "technology",
+      "user_attested": true,
+      "allow_model_role_placement": true
+    },
+    {
+      "term": "Environnement Agile",
+      "kind": "method_domain",
+      "user_attested": true,
+      "allow_model_role_placement": true
+    },
+    {
+      "term": "Expertise confirmée en développement d’interfaces complexes avec React.js",
+      "kind": "technology",
+      "user_attested": true,
+      "allow_model_role_placement": true
+    },
+    {
+      "term": "Expérience des architectures web à fort trafic",
+      "kind": "technology",
+      "user_attested": true,
+      "allow_model_role_placement": true
+    },
+    {
+      "term": "Interfaces web complexes",
+      "kind": "responsibility",
+      "user_attested": true,
+      "allow_model_role_placement": true
+    },
+    {
+      "term": "Intégration d’API REST et GraphQL",
+      "kind": "technology",
+      "user_attested": true,
+      "allow_model_role_placement": true
+    },
+    {
+      "term": "Intégration et livraison continues",
+      "kind": "responsibility",
+      "user_attested": true,
+      "allow_model_role_placement": true
+    },
+    {
+      "term": "Maîtrise des pratiques modernes de développement React",
+      "kind": "technology",
+      "user_attested": true,
+      "allow_model_role_placement": true
+    },
+    {
+      "term": "Performance et scalabilité",
+      "kind": "method_domain",
+      "user_attested": true,
+      "allow_model_role_placement": true
+    },
+    {
+      "term": "Plus de cinq années d’expérience en développement front-end",
+      "kind": "technology",
+      "user_attested": true,
+      "allow_model_role_placement": true
+    },
+    {
+      "term": "Qualité et maintenabilité du code",
+      "kind": "method_domain",
+      "user_attested": true,
+      "allow_model_role_placement": true
+    },
+    {
+      "term": "CDN",
+      "kind": "technology",
+      "user_attested": true,
+      "allow_model_role_placement": true
+    },
+    {
+      "term": "Cache",
+      "kind": "technology",
+      "user_attested": true,
+      "allow_model_role_placement": true
+    },
+    {
+      "term": "Confluence",
+      "kind": "technology",
+      "user_attested": true,
+      "allow_model_role_placement": true
+    },
+    {
+      "term": "Context API",
+      "kind": "technology",
+      "user_attested": true,
+      "allow_model_role_placement": true
+    },
+    {
+      "term": "Hooks",
+      "kind": "technology",
+      "user_attested": true,
+      "allow_model_role_placement": true
+    },
+    {
+      "term": "Hooks et Context API",
       "kind": "technology",
       "user_attested": true,
       "allow_model_role_placement": true

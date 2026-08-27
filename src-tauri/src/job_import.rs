@@ -14,7 +14,7 @@
 //! there. It is the fallback, not the default.
 
 use crate::analysis::{structured_output_text, AnalysisConfig, AnalysisError};
-use crate::api_usage::record_response_usage;
+use crate::api_usage::{record_response_usage, UsageContext};
 use crate::http::{retry_delay, shared_client, status_is_retryable};
 use crate::server::html_to_block_text;
 use reqwest::{StatusCode, Url};
@@ -513,6 +513,7 @@ fn build_extraction_request(
 ) -> serde_json::Value {
     serde_json::json!({
         "model": model,
+        "prompt_cache_key": crate::http::PROMPT_CACHE_KEY_JOB_IMPORT,
         "input": [
             {
                 "role": "system",
@@ -596,8 +597,14 @@ async fn extract_with_llm(
             return Err(error.into());
         }
 
+        // Before the parse; see the note in `analysis::analyze_job`.
+        record_response_usage(
+            "job_import",
+            &config.model,
+            &response_body,
+            UsageContext::default(),
+        );
         let job = parse_extraction_from_response(&response_body)?;
-        record_response_usage("job_import", &config.model, &response_body);
         return Ok(job);
     }
 

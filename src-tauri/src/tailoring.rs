@@ -1,11 +1,14 @@
 use crate::{
     analysis::{find_refusal, incomplete_reason, JobAnalysis},
-    api_usage::record_response_usage,
-    ats_score::{covered_and_omitted, load_locked_sections, score_ats_coverage, AtsCoverage},
-    evidence::{
-        load_evidence_bank, placement_term_is_covered_in_any, preflight_items, EvidenceEntry,
+    api_usage::{record_response_usage, UsageContext},
+    ats_score::{
+        covered_and_omitted, load_locked_sections, score_ats_coverage, AtsCoverage, MissReason,
     },
-    http::shared_client,
+    evidence::{
+        load_evidence_bank, placement_term_is_covered_in_any, preflight_items, EvidenceBank,
+        EvidenceEntry,
+    },
+    http::{retry_delay, shared_client, status_is_retryable},
 };
 use atomicwrites::{AllowOverwrite, AtomicFile};
 use reqwest::StatusCode;
@@ -266,6 +269,11 @@ pub struct TailorRequest {
     pub approved_evidence: Vec<EvidenceEntry>,
     #[serde(default)]
     pub priority_attested_terms: Vec<String>,
+    /// Which capture this run is tailoring for, recorded on each usage receipt so a receipt can
+    /// be joined to its run instead of guessed at by timestamp. Optional so the legacy
+    /// `/analyze` HTTP route, which does not know it, keeps deserializing unchanged.
+    #[serde(default)]
+    pub capture_id: Option<u64>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -375,13 +383,113 @@ const BULLET_REWRITE_INSTRUCTION: &str = "Experience bullets are the primary ATS
 /// and scope is fair game inside a bullet this run replaces outright, and nowhere else.
 const INVENTION_RULE: &str = "Do not invent credentials, employers, tools, metrics, education, certifications, or experience. Inside a replaced bullet only, you may state a responsibility that is directly implied by that role's stated stack, title, and scope even without an explicit evidence entry; never one a person in that role would not routinely own.\n";
 
+/// Renders the job-matched evidence entries for the prompt.
+///
+/// The obvious encoding - `serde_json::to_string` over the entry structs - spends about four
+/// characters of JSON punctuation for every character of actual term, because each entry
+/// repeats the same four keys while every entry in the bank carries `user_attested: true` and
+/// all but one carry no proof note. Grouping by the two attributes that actually vary says
+/// the same thing in roughly a third of the tokens: the terms, their kinds, which ones may be
+/// placed into a role's bullets, and the rare proof note.
+fn render_evidence_block(entries: &[EvidenceEntry]) -> String {
+    if entries.is_empty() {
+        return "User-attested evidence bank: (none matched this job)\n".to_string();
+    }
+
+    let mut block = String::from(
+        "User-attested evidence bank - each term is a capability this person has actually practised:\n",
+    );
+
+    // Stable, meaningful order rather than whatever order the preflight happened to emit.
+    for kind in ["technology", "method_domain", "responsibility"] {
+        let terms = entries
+            .iter()
+            .filter(|entry| entry.user_attested && entry.kind == kind)
+            .map(|entry| entry.term.as_str())
+            .collect::<Vec<_>>();
+        if !terms.is_empty() {
+            block.push_str(&format!("{kind}: {}\n", terms.join(", ")));
+        }
+    }
+    // An unexpected kind still has to reach the model. Grouping must never become a filter.
+    let other = entries
+        .iter()
+        .filter(|entry| {
+            entry.user_attested
+                && !matches!(
+                    entry.kind.as_str(),
+                    "technology" | "method_domain" | "responsibility"
+                )
+        })
+        .map(|entry| format!("{} ({})", entry.term, entry.kind))
+        .collect::<Vec<_>>();
+    if !other.is_empty() {
+        block.push_str(&format!("other: {}\n", other.join(", ")));
+    }
+
+    // Every entry reaching this function is attested today, but the struct allows otherwise and
+    // a term the user has not vouched for must not be folded in with the ones they have.
+    let unattested = entries
+        .iter()
+        .filter(|entry| !entry.user_attested)
+        .map(|entry| entry.term.as_str())
+        .collect::<Vec<_>>();
+    if !unattested.is_empty() {
+        block.push_str(&format!(
+            "Not user-attested - do not claim these: {}\n",
+            unattested.join(", ")
+        ));
+    }
+
+    let placeable = entries
+        .iter()
+        .filter(|entry| entry.user_attested && entry.allow_model_role_placement)
+        .map(|entry| entry.term.as_str())
+        .collect::<Vec<_>>();
+    if !placeable.is_empty() {
+        block.push_str(&format!(
+            "Authorized for placement into an existing role's bullets: {}\n",
+            placeable.join(", ")
+        ));
+    }
+
+    let notes = entries
+        .iter()
+        .filter_map(|entry| {
+            entry
+                .proof_note
+                .as_deref()
+                .map(str::trim)
+                .filter(|note| !note.is_empty())
+                .map(|note| format!("- {}: {note}\n", entry.term))
+        })
+        .collect::<String>();
+    if !notes.is_empty() {
+        block.push_str("Proof notes:\n");
+        block.push_str(&notes);
+    }
+
+    block
+}
+
 /// Builds the tailoring user message.
 ///
-/// Ordering here is about cost, not just readability. Everything above the data payloads is
-/// constant for a given run, and the payloads themselves are several thousand tokens that
-/// never change between retries, so keeping them contiguous lets the provider cache the
-/// prefix across all four attempts. The two retry-feedback blocks are the only volatile text,
-/// so they trail the payload instead of splitting it.
+/// Ordering here is about cost. The provider caches the longest constant prefix of a request
+/// and bills those tokens at a fraction of the normal rate, but only when that prefix is
+/// byte-identical to a recent one and at least 1024 tokens long. So the message is built in
+/// three zones, most-constant first:
+///
+/// * Zone A never varies: the instruction text, then the base resume. About 1850 tokens,
+///   identical for every tailoring call in a language, and identical up to the base resume
+///   across languages.
+/// * Zone B varies per job: output language, job post, analysis, and matched evidence.
+/// * Zone C varies per attempt: the two retry-feedback blocks.
+///
+/// Nothing volatile may move above something constant, or the constant text below it stops
+/// being a shared prefix and gets billed in full on every call. The earlier layout put the
+/// constant base resume *after* the per-job job and analysis payloads and interpolated the
+/// language into the very first line, which left almost nothing cacheable - the receipts in
+/// `data/api-usage/` show retries ten seconds apart getting zero cached tokens.
 pub fn build_tailoring_prompt(
     language: &str,
     parsed_job: &serde_json::Value,
@@ -397,8 +505,7 @@ pub fn build_tailoring_prompt(
     let analysis = serde_json::to_string(analysis).unwrap_or_else(|_| "{}".to_string());
     let base_resume = serde_json::to_string(base_resume).unwrap_or_else(|_| "{}".to_string());
     let placement_terms = priority_attested_terms.to_vec();
-    let approved_evidence =
-        serde_json::to_string(approved_evidence).unwrap_or_else(|_| "[]".to_string());
+    let evidence_block = render_evidence_block(approved_evidence);
     let has_model_placement_terms = !placement_terms.is_empty();
 
     let concise_instruction = if concise {
@@ -413,7 +520,7 @@ pub fn build_tailoring_prompt(
     let correction_instruction = correction_instruction.unwrap_or("");
     let placement_instruction = if has_model_placement_terms {
         format!(
-            "The user explicitly attested the following claims and authorized you to place them in the most plausible existing role: {}. You MUST incorporate every selected claim naturally in one or more experience bullets. You may completely replace the least job-relevant existing bullet claims to make room, while keeping the same jobs and bullet counts. Multiple selected claims may share a bullet when natural. The attestation supports only the named claims; do not invent adjacent details, metrics, employers, dates, credentials, or responsibilities.\n",
+            "The user explicitly attested the following claims and authorized you to place them in the most plausible existing role: {}. You MUST incorporate every selected claim naturally in one or more experience bullets. You may completely replace the least job-relevant existing bullet claims to make room, while keeping the same jobs and bullet counts. Multiple selected claims may share a bullet when natural. The attestation supports only the named claims; do not invent adjacent details, metrics, employers, dates, credentials, or responsibilities.\n\n",
             placement_terms.join(", ")
         )
     } else {
@@ -421,23 +528,26 @@ pub fn build_tailoring_prompt(
     };
 
     format!(
-        "Tailor this {language} resume JSON for maximum truthful ATS alignment.\n\
+        // Zone A - constant. Nothing volatile may be interpolated above the base resume.
+        "Tailor the resume JSON below for maximum truthful ATS alignment against the job post that follows it.\n\
          Return only JSON matching the schema. Preserve the input resume shape exactly.\n\
          Rewrite only the professional summary, experience bullet text, and skills strings.\n\
          Do not change meta, company names, locations, titles, dates, job order, number of jobs, number of bullets, or skill keys.\n\
          Aggressively incorporate ATS keywords, tools, responsibility phrases, and domain wording when the base resume supports them.\n\
          Applicant tracking systems match literal strings, so write each supported term the way this job post writes it. The analysis term_variants list gives the alternate written forms; when an acronym and its expansion are both in common use, name both once in the skills line where it reads naturally, and use the post's own form in bullets.\n\
          {BULLET_REWRITE_INSTRUCTION}\
-         {placement_instruction}\
          Every entry in the user-attested evidence bank is a capability this person has actually practised. Treat each one as usable in an experience bullet, not only in a skills string: place it in the most plausible existing role given that role's stated stack, title, and scope. The attestation covers the named capability only - never invent an adjacent metric, employer, title, date, credential, or certification around it.\n\
          {INVENTION_RULE}\
          Put important job keywords without base-resume or user-attested evidence into omitted_unsupported_keywords instead of adding them to the resume.\n\
          Keep each rewritten bullet close to the original length so the locked DOCX layout remains stable.\n\
          Keep the professional summary to the same sentence count and approximate length as the original, leading with the job's own role wording and its highest-weighted supported terms.\n\n\
+         Base resume JSON:\n{base_resume}\n\n\
+         \
+         Output language: {language}. The base resume above is written in it; keep every value you rewrite in that same language.\n\n\
+         {placement_instruction}\
          Normalized job JSON:\n{parsed_job}\n\n\
          ATS analysis JSON:\n{analysis}\n\n\
-         Base resume JSON:\n{base_resume}\n\n\
-         User-attested evidence bank entries:\n{approved_evidence}\n\n\
+         {evidence_block}\n\
          {concise_instruction}\
          {correction_instruction}",
     )
@@ -549,6 +659,7 @@ pub fn build_tailoring_request(
 ) -> serde_json::Value {
     serde_json::json!({
         "model": model,
+        "prompt_cache_key": crate::http::PROMPT_CACHE_KEY_RESUME_TAILORING,
         "input": [
             {
                 "role": "system",
@@ -570,6 +681,15 @@ pub fn build_tailoring_request(
     })
 }
 
+/// Transport retries for one tailoring attempt.
+///
+/// This is not the correction loop - it is the backoff that analysis and job import have always
+/// had and tailoring did not. A single 429 used to end the whole run, discarding an analysis
+/// call that was already paid for and making the user start over, which costs strictly more
+/// than waiting a second and asking again.
+const MAX_TAILORING_REQUEST_ATTEMPTS: u32 = 3;
+
+#[allow(clippy::too_many_arguments)]
 pub async fn tailor_resume(
     config: &TailoringConfig,
     language: &str,
@@ -580,6 +700,7 @@ pub async fn tailor_resume(
     priority_attested_terms: &[String],
     concise: bool,
     correction_instruction: Option<&str>,
+    usage_context: UsageContext,
 ) -> Result<TailoredResume, TailoringError> {
     validate_language(language)?;
     let request_body = build_tailoring_request(
@@ -594,28 +715,53 @@ pub async fn tailor_resume(
         correction_instruction,
     );
     let url = format!("{}/responses", config.base_url.trim_end_matches('/'));
+    let mut last_error = None;
 
-    let response = shared_client()
-        .post(url)
-        .bearer_auth(&config.api_key)
-        .json(&request_body)
-        .send()
-        .await
-        .map_err(|error| TailoringError::Request(error.to_string()))?;
+    for attempt in 0..MAX_TAILORING_REQUEST_ATTEMPTS {
+        if attempt > 0 {
+            tokio::time::sleep(retry_delay(attempt - 1)).await;
+        }
 
-    let status = response.status();
-    let body = response
-        .text()
-        .await
-        .map_err(|error| TailoringError::Request(error.to_string()))?;
+        let response = match shared_client()
+            .post(&url)
+            .bearer_auth(&config.api_key)
+            .json(&request_body)
+            .send()
+            .await
+        {
+            Ok(response) => response,
+            Err(error) => {
+                last_error = Some(TailoringError::Request(error.to_string()));
+                continue;
+            }
+        };
 
-    if !status.is_success() {
-        return Err(TailoringError::Http { status, body });
+        let status = response.status();
+        let body = match response.text().await {
+            Ok(body) => body,
+            Err(error) => {
+                last_error = Some(TailoringError::Request(error.to_string()));
+                continue;
+            }
+        };
+
+        if !status.is_success() {
+            let error = TailoringError::Http { status, body };
+            if status_is_retryable(status) {
+                last_error = Some(error);
+                continue;
+            }
+            return Err(error);
+        }
+
+        // Before the parse: a refused or truncated response is billed like any other, and a
+        // response that fails to parse is precisely the kind this loop exists to investigate.
+        record_response_usage("resume_tailoring", &config.model, &body, usage_context);
+        let tailored = parse_tailored_resume_from_response(&body)?;
+        return Ok(tailored);
     }
 
-    let tailored = parse_tailored_resume_from_response(&body)?;
-    record_response_usage("resume_tailoring", &config.model, &body);
-    Ok(tailored)
+    Err(last_error.unwrap_or_else(|| TailoringError::Request("no attempt was made".to_string())))
 }
 
 pub fn parse_tailored_resume_from_response(body: &str) -> Result<TailoredResume, TailoringError> {
@@ -969,11 +1115,17 @@ fn missing_model_placement_terms(
 ///
 /// A failure to read the locked sections or the evidence bank degrades the result rather than
 /// failing the run: a resume that renders is worth more to the user than a coverage number.
+/// Takes the bank by reference rather than reading it.
+///
+/// This runs once per successful attempt, and the evidence bank is a 78 KB file with several
+/// hundred entries. Re-reading and re-parsing it on every attempt of a four-attempt run bought
+/// nothing: it cannot change while a run is in flight.
 fn apply_measured_coverage(
     root: &Path,
     language: &str,
     analysis: &JobAnalysis,
     base_resume: &serde_json::Value,
+    bank: &EvidenceBank,
     tailored: &mut TailoredResume,
 ) {
     let locked = match load_locked_sections(root, language) {
@@ -983,21 +1135,42 @@ fn apply_measured_coverage(
             None
         }
     };
-    let bank = match load_evidence_bank(root) {
-        Ok(bank) => bank,
-        Err(error) => {
-            eprintln!("[ats] Scoring without the evidence bank: {error}");
-            Default::default()
-        }
-    };
 
-    let preflight = preflight_items(analysis, base_resume, &bank);
+    let preflight = preflight_items(analysis, base_resume, bank);
     let coverage = score_ats_coverage(analysis, &tailored.content, locked.as_ref(), &preflight);
     let (covered, omitted) = covered_and_omitted(&coverage);
 
     tailored.report.covered_keywords = covered;
     tailored.report.omitted_unsupported_keywords = omitted;
     tailored.report.ats_coverage = Some(coverage);
+}
+
+/// Weight below which a dropped-but-supported term is not worth another model call.
+///
+/// The ledger weights are `required_skills` 5, `tools_and_platforms` and
+/// `responsibility_phrases` 4, `preferred_skills` and `domain_terms` 3, and for a
+/// `core_keyword` the model's own 1-5 importance. Retrying for a 3 spends a whole generation
+/// on something the post itself called optional; 4 is where it is saying it needs this.
+const MIN_UNPLACED_EVIDENCE_WEIGHT: u8 = 4;
+
+/// Names the high-value terms this person can already prove that the resume still does not carry.
+///
+/// Approving a term at the evidence step is permission, not obligation. The prompt only asks the
+/// model to incorporate supported terms "aggressively", and against a fixed bullet count and a
+/// one-page budget that request loses to whatever the model rated higher - while the only hard
+/// requirement, `priority_attested_terms`, is empty on a first run. Nothing used to notice, so
+/// free and truthful coverage was dropped silently and the summary screen had to ask the user to
+/// go and fetch it by hand.
+fn unplaced_supported_terms(coverage: &AtsCoverage) -> Vec<String> {
+    coverage
+        .terms
+        .iter()
+        .filter(|term| {
+            term.miss_reason == Some(MissReason::EvidenceNotPlaced)
+                && term.weight >= MIN_UNPLACED_EVIDENCE_WEIGHT
+        })
+        .map(|term| term.term.clone())
+        .collect()
 }
 
 pub(crate) fn content_changes(
@@ -1703,6 +1876,12 @@ pub async fn tailor_and_render_with_progress(
         );
         error
     })?;
+    // Loaded once, like the base resume above: neither can change while the run is in flight,
+    // and this one is a 78 KB parse.
+    let evidence_bank = load_evidence_bank(&root).unwrap_or_else(|error| {
+        eprintln!("[ats] Scoring without the evidence bank: {error}");
+        EvidenceBank::default()
+    });
     let mut page_counts = Vec::new();
     let mut needs_concise_rewrite = false;
     let mut correction_instruction: Option<String> = None;
@@ -1732,6 +1911,7 @@ pub async fn tailor_and_render_with_progress(
             &request.priority_attested_terms,
             needs_concise_rewrite,
             correction_instruction.as_deref(),
+            UsageContext::attempt(request.capture_id, attempt as u32),
         )
         .await
         {
@@ -1770,6 +1950,23 @@ pub async fn tailor_and_render_with_progress(
                 error.to_string(),
                 Some(attempt),
             );
+            // A shape or locked-field violation used to end the run here, throwing away a
+            // generation that was already billed and leaving the user to start over - which
+            // spends another full call to ask the same question. The bullet-rewrite and
+            // placement validators below have always handed the model its mistake and tried
+            // again; this one is no different in kind, so it uses the same attempt budget.
+            // The constraint itself is unchanged: a response that never satisfies it still
+            // fails, just after the budget is spent rather than before.
+            if attempt < MAX_TAILORING_ATTEMPTS {
+                correction_instruction = Some(format!(
+                    "Your preceding response was rejected: {error}. Return the resume JSON with \
+                     exactly the input shape: same meta, same companies, locations, titles, dates \
+                     and job order, same number of jobs, same number of bullets per job, and the \
+                     same skill keys. Rewrite only the professional summary, the experience \
+                     bullet text, and the skills strings.\n\n"
+                ));
+                continue;
+            }
             return Err(error);
         }
         normalize_bullet_rewrite_decisions(&base_resume, &mut tailored);
@@ -1840,8 +2037,47 @@ pub async fn tailor_and_render_with_progress(
             language,
             &request.analysis,
             &base_resume,
+            &evidence_bank,
             &mut tailored,
         );
+        // Terms this person can already prove, that the pass dropped anyway, are worth exactly
+        // one more call: they need no attestation, so placing them raises the score without
+        // asking the user to vouch for anything. This fires only on the first attempt, which
+        // leaves the entire remaining budget to the validators above - it is an improvement pass
+        // on a response that already satisfied them, and it must never be the reason a run runs
+        // out of attempts. If the corrected response drops them again, that is the answer and the
+        // run proceeds: a rendered resume is worth more to the user than a coverage number.
+        if attempt == 1 {
+            let unplaced = tailored
+                .report
+                .ats_coverage
+                .as_ref()
+                .map(unplaced_supported_terms)
+                .unwrap_or_default();
+            if !unplaced.is_empty() {
+                correction_instruction = Some(format!(
+                    "Your preceding response left out job keywords this person already has \
+                     evidence for: {}. These need no new attestation - the base resume or the \
+                     user-attested evidence bank already supports them. Incorporate every one of \
+                     them naturally into the experience bullets or the skills strings, using the \
+                     job post's own wording. Keep the same jobs, the same bullet counts, and the \
+                     same locked fields, and do not invent any adjacent metric, employer, title, \
+                     date, credential, or certification around them.\n\n",
+                    unplaced.join(", ")
+                ));
+                progress(
+                    reporter,
+                    "safety_validation",
+                    "retrying",
+                    format!(
+                        "Keywords this resume already has evidence for were left out; requesting a corrected response: {}.",
+                        unplaced.join(", ")
+                    ),
+                    Some(attempt),
+                );
+                continue;
+            }
+        }
         correction_instruction = None;
         let experience_bullets_changed =
             count_changed_experience_bullets(&base_resume, &tailored.content);
@@ -2184,16 +2420,79 @@ mod tests {
         build_tailoring_prompt, civil_date_from_days, company_role_slug, content_changes,
         missing_model_placement_terms, normalize_bullet_rewrite_decisions,
         parse_tailored_resume_from_response, partial_tailoring_response, pdf_page_count,
-        publish_verified_artifact, replacement_is_substantial, replacement_length_is_stable,
-        replacement_reads_as_prose, sha256_file, slugify, unchanged_experience_bullets,
-        validate_bullet_rewrites, validate_full_bullet_rewrites, validate_tailored_content,
-        write_variant_files, BulletRewriteDecision, BulletRewriteOutcome, TailoredResume,
-        TailoringReport, MAX_COMPANY_ROLE_SLUG_LEN,
+        publish_verified_artifact, render_evidence_block, replacement_is_substantial,
+        replacement_length_is_stable, replacement_reads_as_prose, sha256_file, slugify,
+        unchanged_experience_bullets, unplaced_supported_terms, validate_bullet_rewrites,
+        validate_full_bullet_rewrites, validate_tailored_content, write_variant_files,
+        BulletRewriteDecision, BulletRewriteOutcome, TailoredResume, TailoringReport,
+        MAX_COMPANY_ROLE_SLUG_LEN,
     };
     use crate::analysis::{JobAnalysis, KeywordSignal};
+    use crate::ats_score::{AtsCoverage, MissReason, TermCoverage};
     use crate::evidence::EvidenceEntry;
     use lopdf::{dictionary, Document, Object};
     use serde_json::json;
+
+    fn missed_term(term: &str, weight: u8, reason: Option<MissReason>) -> TermCoverage {
+        TermCoverage {
+            term: term.to_string(),
+            kind: "technology".to_string(),
+            group: "required".to_string(),
+            weight,
+            covered: reason.is_none(),
+            coverage_ratio: if reason.is_none() { 1.0 } else { 0.0 },
+            matched_in: None,
+            in_editable_surface: reason.is_none(),
+            miss_reason: reason,
+        }
+    }
+
+    fn coverage_of(terms: Vec<TermCoverage>) -> AtsCoverage {
+        AtsCoverage {
+            score: 50,
+            covered_weight: 0,
+            total_weight: terms.iter().map(|term| u32::from(term.weight)).sum(),
+            editable_covered_weight: 0,
+            categories: Vec::new(),
+            terms,
+        }
+    }
+
+    /// The retry exists for coverage the run could have had for free, so it must fire on a miss
+    /// the preflight already cleared - and stay quiet for one that needs the user to attest.
+    #[test]
+    fn only_already_supported_misses_are_worth_another_attempt() {
+        let coverage = coverage_of(vec![
+            missed_term("Kubernetes", 5, Some(MissReason::EvidenceNotPlaced)),
+            missed_term("Terraform", 5, Some(MissReason::NoEvidence)),
+            missed_term("Rust", 5, None),
+        ]);
+        assert_eq!(
+            unplaced_supported_terms(&coverage),
+            vec!["Kubernetes".to_string()]
+        );
+    }
+
+    /// A whole extra generation is too expensive to spend on a term the post itself called
+    /// optional, so the low-weight groups - `preferred_skills` and `domain_terms` at 3, and a
+    /// `core_keyword` the model rated below that - do not trigger it.
+    #[test]
+    fn low_weight_misses_do_not_trigger_another_attempt() {
+        let coverage = coverage_of(vec![
+            missed_term("GraphQL", 3, Some(MissReason::EvidenceNotPlaced)),
+            missed_term("gRPC", 1, Some(MissReason::EvidenceNotPlaced)),
+        ]);
+        assert!(unplaced_supported_terms(&coverage).is_empty());
+    }
+
+    /// A run whose document scored nothing at all still has to finish. The gate reads coverage
+    /// through an `Option`, and treating a missing measurement as "nothing was left behind" is
+    /// what keeps a scoring failure from turning into an extra billed attempt.
+    #[test]
+    fn a_fully_covered_document_asks_for_no_extra_attempt() {
+        let coverage = coverage_of(vec![missed_term("Rust", 5, None)]);
+        assert!(unplaced_supported_terms(&coverage).is_empty());
+    }
 
     fn analysis() -> JobAnalysis {
         JobAnalysis {
@@ -2560,6 +2859,273 @@ mod tests {
         assert!(prompt.contains("Do not invent"));
         assert!(prompt.contains("omitted_unsupported_keywords"));
         assert!(prompt.contains("Rust Engineer"));
+    }
+
+    /// The provider bills a cached prefix at a fraction of the normal rate, but only when that
+    /// prefix is byte-identical to a recent request and at least 1024 tokens long. That makes
+    /// the constant zone a property worth testing rather than a style preference: anything
+    /// volatile that drifts above the marker silently costs full price on every call from then
+    /// on, with no failing test and nothing visible in the UI to notice.
+    #[test]
+    fn tailoring_prompt_keeps_a_stable_cacheable_prefix() {
+        const MARKER: &str = "\nOutput language: ";
+
+        let evidence = vec![EvidenceEntry {
+            term: "Kubernetes".to_string(),
+            kind: "technology".to_string(),
+            proof_note: Some("ran the 2024 migration".to_string()),
+            user_attested: true,
+            allow_model_role_placement: true,
+        }];
+        let other_job = json!({
+            "title": "Platform Lead",
+            "company": "Globex",
+            "description": "Totally different posting with different wording."
+        });
+        let job = json!({"title": "Rust Engineer"});
+
+        // Every axis the prompt varies on: job, language, evidence, the re-tailor placement
+        // path, and both retry-feedback blocks.
+        let variants = [
+            build_tailoring_prompt(
+                "en",
+                &job,
+                &analysis(),
+                &base_resume(),
+                &[],
+                &[],
+                false,
+                None,
+            ),
+            build_tailoring_prompt(
+                "en",
+                &other_job,
+                &analysis(),
+                &base_resume(),
+                &[],
+                &[],
+                false,
+                None,
+            ),
+            build_tailoring_prompt(
+                "fr",
+                &job,
+                &analysis(),
+                &base_resume(),
+                &[],
+                &[],
+                false,
+                None,
+            ),
+            build_tailoring_prompt(
+                "en",
+                &job,
+                &analysis(),
+                &base_resume(),
+                &evidence,
+                &[],
+                false,
+                None,
+            ),
+            build_tailoring_prompt(
+                "en",
+                &job,
+                &analysis(),
+                &base_resume(),
+                &evidence,
+                &["Kubernetes".to_string()],
+                false,
+                None,
+            ),
+            build_tailoring_prompt(
+                "en",
+                &job,
+                &analysis(),
+                &base_resume(),
+                &[],
+                &[],
+                true,
+                None,
+            ),
+            build_tailoring_prompt(
+                "en",
+                &job,
+                &analysis(),
+                &base_resume(),
+                &[],
+                &[],
+                false,
+                Some("Your preceding response was rejected: every bullet must change.\n\n"),
+            ),
+        ];
+
+        let expected = variants[0].split(MARKER).next().unwrap().to_string();
+        for (index, prompt) in variants.iter().enumerate() {
+            assert_eq!(
+                prompt.matches(MARKER).count(),
+                1,
+                "variant {index} does not have exactly one zone boundary"
+            );
+            assert_eq!(
+                prompt.split(MARKER).next().unwrap(),
+                expected,
+                "variant {index} changed the constant prefix, which disables prompt caching"
+            );
+        }
+
+        // Roughly four characters per token. Under 1024 tokens the provider caches nothing at
+        // all, so trimming the instruction text far enough would quietly switch caching off.
+        assert!(
+            expected.len() > 4 * 1024,
+            "constant prefix is only {} chars, too short to be cached",
+            expected.len()
+        );
+    }
+
+    /// Across languages the base resume itself differs, so the shared prefix ends where the
+    /// resume begins. That head is about 3,800 chars - roughly 950 tokens, just under the
+    /// 1024-token floor - so EN and FR do not share a cache entry in practice, and padding the
+    /// instructions with filler to clear the bar would buy a discount by adding the very tokens
+    /// it discounts. The cached unit is therefore per language: instructions plus that
+    /// language's base resume, which `tailoring_prompt_keeps_a_stable_cacheable_prefix` checks
+    /// clears the floor comfortably. Keeping the instruction head identical anyway costs
+    /// nothing and is what makes the per-language prefixes stable.
+    #[test]
+    fn tailoring_instructions_are_identical_across_languages() {
+        let fr_base = json!({
+            "meta": { "language": "fr", "type": "base", "template": "Xevier_T_CV_fr.template.docx" },
+            "summary": "Ingénieur avec six ans d'expérience.",
+            "experience": [{
+                "company": "Acme",
+                "location": "Remote",
+                "title": "Ingénieur",
+                "dates": "2024 - Present",
+                "bullets": ["Construit des API.", "Amélioré la fiabilité."]
+            }],
+            "skills": { "frontend": "Frontend: React" }
+        });
+        let head = |prompt: &str| {
+            prompt
+                .split("Base resume JSON:")
+                .next()
+                .unwrap()
+                .to_string()
+        };
+        let en = build_tailoring_prompt(
+            "en",
+            &json!({"title": "Rust Engineer"}),
+            &analysis(),
+            &base_resume(),
+            &[],
+            &[],
+            false,
+            None,
+        );
+        let fr = build_tailoring_prompt(
+            "fr",
+            &json!({"title": "Développeur"}),
+            &analysis(),
+            &fr_base,
+            &[],
+            &[],
+            false,
+            None,
+        );
+
+        assert_eq!(head(&en), head(&fr));
+    }
+
+    #[test]
+    fn evidence_block_keeps_every_term_and_costs_less_than_json() {
+        let entries = vec![
+            EvidenceEntry {
+                term: "Rust".to_string(),
+                kind: "technology".to_string(),
+                proof_note: None,
+                user_attested: true,
+                allow_model_role_placement: false,
+            },
+            EvidenceEntry {
+                term: "Kubernetes".to_string(),
+                kind: "technology".to_string(),
+                proof_note: None,
+                user_attested: true,
+                allow_model_role_placement: true,
+            },
+            EvidenceEntry {
+                term: "event sourcing".to_string(),
+                kind: "method_domain".to_string(),
+                proof_note: None,
+                user_attested: true,
+                allow_model_role_placement: false,
+            },
+            EvidenceEntry {
+                term: "incident response".to_string(),
+                kind: "responsibility".to_string(),
+                proof_note: Some("carried the on-call rotation".to_string()),
+                user_attested: true,
+                allow_model_role_placement: true,
+            },
+        ];
+
+        let block = render_evidence_block(&entries);
+
+        // Nothing the JSON form carried may be lost: term, kind, placement right, proof note.
+        for entry in &entries {
+            assert!(
+                block.contains(&entry.term),
+                "{} missing from {block}",
+                entry.term
+            );
+        }
+        assert!(block.contains("technology: Rust, Kubernetes"));
+        assert!(block.contains("method_domain: event sourcing"));
+        assert!(block.contains("responsibility: incident response"));
+        assert!(block.contains(
+            "Authorized for placement into an existing role's bullets: Kubernetes, incident response"
+        ));
+        assert!(block.contains("- incident response: carried the on-call rotation"));
+
+        let as_json = serde_json::to_string(&entries).unwrap();
+        assert!(
+            block.len() < as_json.len(),
+            "compact block ({} chars) should undercut the JSON form ({} chars)",
+            block.len(),
+            as_json.len()
+        );
+    }
+
+    /// Grouping by attribute must never become a filter: a term the user has not vouched for
+    /// cannot be listed alongside the ones they have.
+    #[test]
+    fn evidence_block_separates_unattested_and_unknown_kinds() {
+        let entries = vec![
+            EvidenceEntry {
+                term: "Terraform".to_string(),
+                kind: "technology".to_string(),
+                proof_note: None,
+                user_attested: false,
+                allow_model_role_placement: false,
+            },
+            EvidenceEntry {
+                term: "stakeholder alignment".to_string(),
+                kind: "something_new".to_string(),
+                proof_note: None,
+                user_attested: true,
+                allow_model_role_placement: false,
+            },
+        ];
+
+        let block = render_evidence_block(&entries);
+
+        assert!(block.contains("Not user-attested - do not claim these: Terraform"));
+        assert!(!block.contains("technology: Terraform"));
+        assert!(block.contains("other: stakeholder alignment (something_new)"));
+    }
+
+    #[test]
+    fn evidence_block_states_when_nothing_matched() {
+        assert!(render_evidence_block(&[]).contains("(none matched this job)"));
     }
 
     #[test]

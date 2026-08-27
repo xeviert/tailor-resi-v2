@@ -14,6 +14,26 @@ pub struct ApiTokenUsage {
     pub reasoning_output_tokens: Option<u64>,
 }
 
+/// What run a receipt belongs to.
+///
+/// Without this a receipt can only be tied back to the run that caused it by timestamp
+/// proximity, which is guesswork exactly where it matters most - a four-attempt tailoring run
+/// writes four receipts seconds apart and they all look alike.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct UsageContext {
+    pub capture_id: Option<u64>,
+    pub attempt: Option<u32>,
+}
+
+impl UsageContext {
+    pub fn attempt(capture_id: Option<u64>, attempt: u32) -> Self {
+        Self {
+            capture_id,
+            attempt: Some(attempt),
+        }
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 struct ApiUsageRecord {
     schema_version: u8,
@@ -22,6 +42,11 @@ struct ApiUsageRecord {
     requested_model: String,
     response_id: Option<String>,
     response_model: Option<String>,
+    /// Which capture this call was serving, and which attempt within its run.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    capture_id: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    attempt: Option<u32>,
     usage: ApiTokenUsage,
 }
 
@@ -64,7 +89,17 @@ fn safe_component(value: &str) -> String {
     safe.trim_matches('-').chars().take(80).collect()
 }
 
-pub fn record_response_usage(stage: &str, requested_model: &str, body: &str) {
+/// Persists a usage-only receipt for one API response.
+///
+/// Call this before parsing the response, not after. A refused, incomplete, or malformed
+/// response is billed just like a good one, and recording it afterwards means the failures that
+/// drive the retry loop - the expensive ones - are the exact calls missing from the ledger.
+pub fn record_response_usage(
+    stage: &str,
+    requested_model: &str,
+    body: &str,
+    context: UsageContext,
+) {
     let result = (|| -> Result<(), String> {
         let response: serde_json::Value = serde_json::from_str(body).map_err(|e| e.to_string())?;
         let Some(usage) = token_usage(&response) else {
@@ -80,7 +115,7 @@ pub fn record_response_usage(stage: &str, requested_model: &str, body: &str) {
             .and_then(serde_json::Value::as_str)
             .map(str::to_string);
         let record = ApiUsageRecord {
-            schema_version: 1,
+            schema_version: 2,
             recorded_at_ms,
             stage: stage.to_string(),
             requested_model: requested_model.to_string(),
@@ -89,6 +124,8 @@ pub fn record_response_usage(stage: &str, requested_model: &str, body: &str) {
                 .get("model")
                 .and_then(serde_json::Value::as_str)
                 .map(str::to_string),
+            capture_id: context.capture_id,
+            attempt: context.attempt,
             usage,
         };
         let directory = root.join("data").join("api-usage");

@@ -1,19 +1,22 @@
 {
-  "received_at_ms": 1787755710968,
+  "received_at_ms": 1787849985622,
   "payload": {
     "capturedCount": 0,
     "json": {
       "@context": "http://schema.org",
       "@type": "JobPosting",
-      "applicantLocationRequirements": {
-        "@type": "Country"
+      "baseSalary": {
+        "@type": "MonetaryAmount",
+        "currency": "EUR",
+        "value": {
+          "@type": "QuantitativeValue",
+          "maxValue": 55000,
+          "minValue": 50000,
+          "unitText": "YEARLY"
+        }
       },
-      "datePosted": "2026-08-25T14:03:31Z",
-      "description": "<p>La plateforme de gestion financière “tout en un” de Basikon repose sur une technologie sophistiquée, afin de permettre à nos clients de “devenir des fintechs”.</p><p>Notre méthodologie hyper-agile repose sur un ensemble d’innovation accélératrice</p><ul><li><p>Une stack unifié sur le client et le serveur, reposant sur un langage incontournable : Javascript</p></li><li><p>Une technologie low-code permettant de développer de la logique métier avec une productivité inégalée</p></li><li><p>Une plateforme “cloud native” agnostique et hyper résiliente, opérant simultanément sur tous les grand fournisseurs cloud</p></li><li><p>Une chaine CI/CD de pointe</p></li><li><p>Une plateforme de test permettant de garantir la non régression</p></li></ul><p>Sur ce stack nous avons développé une plateforme cloud très riche en fonctionnalité, que nous avons déployée dans 15 banque en France et en Afrique.</p><p>Nous avons besoin d’un développeur expérimenté pour faire encore plus progresser notre plateforme.</p><ul><li><p>Vous contribuerez à implémenter des technologies cloud sophistiquées</p></li><li><p>Votre curiosité et votre autonomie vous permettront d’être une force de proposition</p></li><li><p>Grâce à notre stack simplificateur votre code sera “lean” et vous aurez la satisfaction d’obtenir une productivité maximale</p></li></ul><p>L’opportunité de réaliser une plateforme cloud universelle n’est pas donné à tout le monde, venez rejoindre l’univers Basikon pour inventer la plateforme financière de demain !</p>",
-      "educationRequirements": {
-        "@type": "EducationalOccupationalCredential",
-        "credentialCategory": "postgraduate degree"
-      },
+      "datePosted": "2026-08-25T13:12:35Z",
+      "description": "<p>Nous recherchons un(e) Développeur(se) Front-end React Senior pour contribuer à la conception et à l’évolution d’interfaces web complexes, performantes et capables de répondre à des enjeux de forte fréquentation.<br/>Vous interviendrez dans un environnement technique moderne et collaboratif, en lien étroit avec les différentes parties prenantes du projet.</p><p>Vos missions</p><ul><li><p>Concevoir, développer et faire évoluer des interfaces complexes avec React.js.</p></li><li><p>Structurer l’architecture des données côté front-end avec Redux.</p></li><li><p>Gérer les traitements et effets de bord asynchrones.</p></li><li><p>Développer des composants modulaires, réutilisables et maintenables avec TypeScript.</p></li><li><p>Utiliser les pratiques modernes de l’écosystème React, notamment les Hooks et la Context API.</p></li><li><p>Participer aux choix d’architecture et proposer des solutions adaptées aux contraintes de performance et de scalabilité.</p></li><li><p>Améliorer les performances des applications en travaillant notamment sur les Core Web Vitals, les stratégies de cache et l’utilisation des CDN.</p></li><li><p>Consommer et intégrer des API REST et GraphQL.</p></li><li><p>Intervenir sur des projets s’appuyant sur MongoDB et ElasticSearch.</p></li><li><p>Mettre en œuvre des stratégies de tests unitaires et d’intégration.</p></li><li><p>Participer à l’automatisation des processus d’intégration et de livraison continues.</p></li><li><p>Contribuer aux revues de code et à l’amélioration continue de la qualité technique.</p></li><li><p>Collaborer avec les équipes dans un environnement Agile et échanger sur les choix techniques.</p></li></ul><p>Environnement technique</p><ul><li><p>React.js ;</p></li><li><p>TypeScript ;</p></li><li><p>Redux ;</p></li><li><p>Hooks et Context API ;</p></li><li><p>API REST et GraphQL ;</p></li><li><p>MongoDB ;</p></li><li><p>ElasticSearch ;</p></li><li><p>Git ;</p></li><li><p>Jenkins ;</p></li><li><p>Tests unitaires et tests d’intégration ;</p></li><li><p>CI/CD ;</p></li><li><p>Cache, CDN et Core Web Vitals ;</p></li><li><p>Méthodes Agile : Scrum et Kanban.</p></li></ul>",
       "employmentType": "FULL_TIME",
       "experienceRequirements": {
         "@type": "OccupationalExperienceRequirements",
@@ -26,14 +29,14 @@
           "addressCountry": "FR",
           "addressLocality": "Paris",
           "addressRegion": "Paris",
-          "postalCode": "75004",
-          "streetAddress": "5, Rue du Cloître Saint-Merri"
+          "postalCode": "75013",
+          "streetAddress": "129, Rue Léon-Maurice Nordmann, Paris"
         },
-        "logo": "https://cdn-images.welcometothejungle.com/TnPzjQmy-ErzdWMlA0aMMxRrCk117y4h9FVqIX9Pyg0/rs:auto:400::/q:85/czM6Ly93dHRqLXByb2R1Y3Rpb24vdXBsb2Fkcy9vcmdhbml6YXRpb24vbG9nby81ODMzLzE2NjUxNC83NzU0NzQ1Yy04YWEzLTRkOTQtYmI2My02NzZkMzkzNTc0Y2YucG5n",
-        "name": "Basikon",
-        "sameAs": "http://www.basikon.com"
+        "logo": "https://cdn-images.welcometothejungle.com/udBByNy9110j8PWLbozmhS7Od1M7Mj3RtzKT4yHRB0k/rs:auto:400::/q:85/czM6Ly93dHRqLXByb2R1Y3Rpb24vdXBsb2Fkcy9vcmdhbml6YXRpb24vbG9nby81NzY3LzE2NDg4MS85ZGY3MWY1ZS05MGExLTQyNDYtYTE1ZC0xOGEwYjQ5YmRiZTIucG5n",
+        "name": "Warren Walter",
+        "sameAs": "https://www.warren-walter.com/"
       },
-      "industry": "Logiciels, Finance",
+      "industry": "Application mobile, Logiciels, Digital Marketing / Data Marketing, IT / Digital",
       "jobLocation": [
         {
           "@type": "Place",
@@ -42,43 +45,44 @@
             "addressCountry": "FR",
             "addressLocality": "Paris",
             "addressRegion": "Paris",
-            "postalCode": "75004",
-            "streetAddress": "5 Rue du Cloître Saint-Merri, 75004 Paris, France"
+            "postalCode": "75001",
+            "streetAddress": "Paris, Ile-de-France, France"
           }
         }
       ],
-      "jobLocationType": "TELECOMMUTE",
-      "qualifications": "Vous êtes une personne passionnée et avez commencé à développer par vous même avant de rejoindre votre école ; vous avez déjà une expérience professionnelle de plusieurs années.",
-      "title": "Développeur JS Full-Stack Senior",
-      "validThrough": "2026-11-23T15:03:31.000Z"
+      "qualifications": "Vous justifiez de plus de cinq années d’expérience significative en développement front-end.Vous disposez d’une expertise confirmée dans le développement d’interfaces complexes avec React.js.Vous maîtrisez TypeScript, Redux et les pratiques modernes de développement React.Vous avez déjà travaillé sur des architectures web à fort trafic et connaissez les problématiques de performance et de scalabilité.Vous êtes à l’aise avec l’intégration d’API REST et GraphQL.Vous possédez une expérience professionnelle significative sur des projets utilisant MongoDB et ElasticSearch.Vous maîtrisez Git ainsi que les chaînes d’intégration continue reposant sur Jenkins.Vous accordez une grande importance à la qualité, aux tests, à la maintenabilité et à la réutilisabilité du code.Vous êtes à l’aise dans un environnement Agile et savez argumenter vos choix techniques.Expertises appréciéesUne expérience dans le secteur des médias ou sur des projets impliquant du streaming vidéo.Une sensibilité aux normes d’accessibilité numérique.Une contribution à la création ou à l’évolution d’un Design System.Une bonne maîtrise des outils collaboratifs Jira et Confluence.",
+      "title": "Développeur Front-end ReactJS Sénior (H/F)",
+      "validThrough": "2026-11-23T14:12:35.000Z"
     },
-    "pageTitle": "Senior Full-Stack JavaScript Developer - Basikon - Permanent Contract - Fully Remote",
-    "score": 54.24,
-    "sourceUrl": "https://www.welcometothejungle.com/fr/companies/basikon/jobs/developpeur-js-full-stack-it-ops-senior"
+    "pageTitle": "Senior ReactJS Front-end Developer (M/F) - Warren Walter - Permanent contract in Paris",
+    "score": 57,
+    "sourceUrl": "https://www.welcometothejungle.com/fr/companies/warren-walter/jobs/developpeur-front-end-reactjs-senior-h-f_paris"
   },
   "parsed": {
-    "company": "Basikon",
+    "company": "Warren Walter",
     "company_hq": "Paris, FR",
-    "company_logo": "https://cdn-images.welcometothejungle.com/TnPzjQmy-ErzdWMlA0aMMxRrCk117y4h9FVqIX9Pyg0/rs:auto:400::/q:85/czM6Ly93dHRqLXByb2R1Y3Rpb24vdXBsb2Fkcy9vcmdhbml6YXRpb24vbG9nby81ODMzLzE2NjUxNC83NzU0NzQ1Yy04YWEzLTRkOTQtYmI2My02NzZkMzkzNTc0Y2YucG5n",
-    "company_website": "http://www.basikon.com",
-    "date_posted": "2026-08-25T14:03:31Z",
-    "description": "La plateforme de gestion financière “tout en un” de Basikon repose sur une technologie sophistiquée, afin de permettre à nos clients de “devenir des fintechs”. Notre méthodologie hyper-agile repose sur un ensemble d’innovation accélératrice Une stack unifié sur le client et le serveur, reposant sur un langage incontournable : Javascript Une technologie low-code permettant de développer de la logique métier avec une productivité inégalée Une plateforme “cloud native” agnostique et hyper résiliente, opérant simultanément sur tous les grand fournisseurs cloud Une chaine CI/CD de pointe Une plateforme de test permettant de garantir la non régression Sur ce stack nous avons développé une plateforme cloud très riche en fonctionnalité, que nous avons déployée dans 15 banque en France et en Afrique. Nous avons besoin d’un développeur expérimenté pour faire encore plus progresser notre plateforme. Vous contribuerez à implémenter des technologies cloud sophistiquées Votre curiosité et votre autonomie vous permettront d’être une force de proposition Grâce à notre stack simplificateur votre code sera “lean” et vous aurez la satisfaction d’obtenir une productivité maximale L’opportunité de réaliser une plateforme cloud universelle n’est pas donné à tout le monde, venez rejoindre l’univers Basikon pour inventer la plateforme financière de demain !",
-    "description_html": "<p>La plateforme de gestion financière “tout en un” de Basikon repose sur une technologie sophistiquée, afin de permettre à nos clients de “devenir des fintechs”.</p><p>Notre méthodologie hyper-agile repose sur un ensemble d’innovation accélératrice</p><ul><li><p>Une stack unifié sur le client et le serveur, reposant sur un langage incontournable : Javascript</p></li><li><p>Une technologie low-code permettant de développer de la logique métier avec une productivité inégalée</p></li><li><p>Une plateforme “cloud native” agnostique et hyper résiliente, opérant simultanément sur tous les grand fournisseurs cloud</p></li><li><p>Une chaine CI/CD de pointe</p></li><li><p>Une plateforme de test permettant de garantir la non régression</p></li></ul><p>Sur ce stack nous avons développé une plateforme cloud très riche en fonctionnalité, que nous avons déployée dans 15 banque en France et en Afrique.</p><p>Nous avons besoin d’un développeur expérimenté pour faire encore plus progresser notre plateforme.</p><ul><li><p>Vous contribuerez à implémenter des technologies cloud sophistiquées</p></li><li><p>Votre curiosité et votre autonomie vous permettront d’être une force de proposition</p></li><li><p>Grâce à notre stack simplificateur votre code sera “lean” et vous aurez la satisfaction d’obtenir une productivité maximale</p></li></ul><p>L’opportunité de réaliser une plateforme cloud universelle n’est pas donné à tout le monde, venez rejoindre l’univers Basikon pour inventer la plateforme financière de demain !</p>",
+    "company_logo": "https://cdn-images.welcometothejungle.com/udBByNy9110j8PWLbozmhS7Od1M7Mj3RtzKT4yHRB0k/rs:auto:400::/q:85/czM6Ly93dHRqLXByb2R1Y3Rpb24vdXBsb2Fkcy9vcmdhbml6YXRpb24vbG9nby81NzY3LzE2NDg4MS85ZGY3MWY1ZS05MGExLTQyNDYtYTE1ZC0xOGEwYjQ5YmRiZTIucG5n",
+    "company_website": "https://www.warren-walter.com/",
+    "date_posted": "2026-08-25T13:12:35Z",
+    "description": "Nous recherchons un(e) Développeur(se) Front-end React Senior pour contribuer à la conception et à l’évolution d’interfaces web complexes, performantes et capables de répondre à des enjeux de forte fréquentation. Vous interviendrez dans un environnement technique moderne et collaboratif, en lien étroit avec les différentes parties prenantes du projet. Vos missions Concevoir, développer et faire évoluer des interfaces complexes avec React.js. Structurer l’architecture des données côté front-end avec Redux. Gérer les traitements et effets de bord asynchrones. Développer des composants modulaires, réutilisables et maintenables avec TypeScript. Utiliser les pratiques modernes de l’écosystème React, notamment les Hooks et la Context API. Participer aux choix d’architecture et proposer des solutions adaptées aux contraintes de performance et de scalabilité. Améliorer les performances des applications en travaillant notamment sur les Core Web Vitals, les stratégies de cache et l’utilisation des CDN. Consommer et intégrer des API REST et GraphQL. Intervenir sur des projets s’appuyant sur MongoDB et ElasticSearch. Mettre en œuvre des stratégies de tests unitaires et d’intégration. Participer à l’automatisation des processus d’intégration et de livraison continues. Contribuer aux revues de code et à l’amélioration continue de la qualité technique. Collaborer avec les équipes dans un environnement Agile et échanger sur les choix techniques. Environnement technique React.js ; TypeScript ; Redux ; Hooks et Context API ; API REST et GraphQL ; MongoDB ; ElasticSearch ; Git ; Jenkins ; Tests unitaires et tests d’intégration ; CI/CD ; Cache, CDN et Core Web Vitals ; Méthodes Agile : Scrum et Kanban.",
+    "description_html": "<p>Nous recherchons un(e) Développeur(se) Front-end React Senior pour contribuer à la conception et à l’évolution d’interfaces web complexes, performantes et capables de répondre à des enjeux de forte fréquentation.<br/>Vous interviendrez dans un environnement technique moderne et collaboratif, en lien étroit avec les différentes parties prenantes du projet.</p><p>Vos missions</p><ul><li><p>Concevoir, développer et faire évoluer des interfaces complexes avec React.js.</p></li><li><p>Structurer l’architecture des données côté front-end avec Redux.</p></li><li><p>Gérer les traitements et effets de bord asynchrones.</p></li><li><p>Développer des composants modulaires, réutilisables et maintenables avec TypeScript.</p></li><li><p>Utiliser les pratiques modernes de l’écosystème React, notamment les Hooks et la Context API.</p></li><li><p>Participer aux choix d’architecture et proposer des solutions adaptées aux contraintes de performance et de scalabilité.</p></li><li><p>Améliorer les performances des applications en travaillant notamment sur les Core Web Vitals, les stratégies de cache et l’utilisation des CDN.</p></li><li><p>Consommer et intégrer des API REST et GraphQL.</p></li><li><p>Intervenir sur des projets s’appuyant sur MongoDB et ElasticSearch.</p></li><li><p>Mettre en œuvre des stratégies de tests unitaires et d’intégration.</p></li><li><p>Participer à l’automatisation des processus d’intégration et de livraison continues.</p></li><li><p>Contribuer aux revues de code et à l’amélioration continue de la qualité technique.</p></li><li><p>Collaborer avec les équipes dans un environnement Agile et échanger sur les choix techniques.</p></li></ul><p>Environnement technique</p><ul><li><p>React.js ;</p></li><li><p>TypeScript ;</p></li><li><p>Redux ;</p></li><li><p>Hooks et Context API ;</p></li><li><p>API REST et GraphQL ;</p></li><li><p>MongoDB ;</p></li><li><p>ElasticSearch ;</p></li><li><p>Git ;</p></li><li><p>Jenkins ;</p></li><li><p>Tests unitaires et tests d’intégration ;</p></li><li><p>CI/CD ;</p></li><li><p>Cache, CDN et Core Web Vitals ;</p></li><li><p>Méthodes Agile : Scrum et Kanban.</p></li></ul>",
     "domain": "welcometothejungle",
-    "education_requirement": "postgraduate degree",
+    "education_requirement": null,
     "industry_tags": [
+      "Application mobile",
       "Logiciels",
-      "Finance"
+      "Digital Marketing / Data Marketing",
+      "IT / Digital"
     ],
     "job_type": "Full-time",
     "locations": [
       "Paris, FR"
     ],
     "parsed": true,
-    "qualifications": "Vous êtes une personne passionnée et avez commencé à développer par vous même avant de rejoindre votre école ; vous avez déjà une expérience professionnelle de plusieurs années.",
-    "title": "Développeur JS Full-Stack Senior",
-    "url": "https://www.welcometothejungle.com/fr/companies/basikon/jobs/developpeur-js-full-stack-it-ops-senior",
-    "valid_through": "2026-11-23T15:03:31.000Z",
+    "qualifications": "Vous justifiez de plus de cinq années d’expérience significative en développement front-end.Vous disposez d’une expertise confirmée dans le développement d’interfaces complexes avec React.js.Vous maîtrisez TypeScript, Redux et les pratiques modernes de développement React.Vous avez déjà travaillé sur des architectures web à fort trafic et connaissez les problématiques de performance et de scalabilité.Vous êtes à l’aise avec l’intégration d’API REST et GraphQL.Vous possédez une expérience professionnelle significative sur des projets utilisant MongoDB et ElasticSearch.Vous maîtrisez Git ainsi que les chaînes d’intégration continue reposant sur Jenkins.Vous accordez une grande importance à la qualité, aux tests, à la maintenabilité et à la réutilisabilité du code.Vous êtes à l’aise dans un environnement Agile et savez argumenter vos choix techniques.Expertises appréciéesUne expérience dans le secteur des médias ou sur des projets impliquant du streaming vidéo.Une sensibilité aux normes d’accessibilité numérique.Une contribution à la création ou à l’évolution d’un Design System.Une bonne maîtrise des outils collaboratifs Jira et Confluence.",
+    "title": "Développeur Front-end ReactJS Sénior (H/F)",
+    "url": "https://www.welcometothejungle.com/fr/companies/warren-walter/jobs/developpeur-front-end-reactjs-senior-h-f_paris",
+    "valid_through": "2026-11-23T14:12:35.000Z",
     "warnings": []
   }
 }

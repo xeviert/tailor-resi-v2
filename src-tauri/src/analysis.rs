@@ -1,4 +1,4 @@
-use crate::api_usage::record_response_usage;
+use crate::api_usage::{record_response_usage, UsageContext};
 use crate::http::{retry_delay, shared_client, status_is_retryable};
 use reqwest::StatusCode;
 use serde::{Deserialize, Serialize};
@@ -182,6 +182,7 @@ fn analysis_schema() -> serde_json::Value {
 fn build_openai_request(model: &str, parsed_job: &serde_json::Value) -> serde_json::Value {
     serde_json::json!({
         "model": model,
+        "prompt_cache_key": crate::http::PROMPT_CACHE_KEY_JOB_ANALYSIS,
         "input": [
             {
                 "role": "system",
@@ -252,8 +253,15 @@ pub async fn analyze_job(
             return Err(error);
         }
 
+        // Before the parse: a refused or truncated response is billed too, and those are
+        // exactly the calls a cost investigation needs to see.
+        record_response_usage(
+            "job_analysis",
+            &config.model,
+            &body,
+            UsageContext::default(),
+        );
         let analysis = parse_job_analysis_from_response(&body)?;
-        record_response_usage("job_analysis", &config.model, &body);
         return Ok(analysis);
     }
 
@@ -356,6 +364,49 @@ mod tests {
         assert!(prompt.contains("Semantically deduplicate"));
         assert!(prompt.contains("one to six words"));
         assert!(prompt.contains("same language as the job post"));
+    }
+
+    /// Records why this stage gets no prefix-cache discount, so nobody re-derives it.
+    ///
+    /// The ordering is right - instructions first, job post last - but the constant part is too
+    /// small to qualify. The system message and this instruction block come to roughly 2,600
+    /// chars, about 650 tokens, and the provider caches nothing below 1024. The output schema is
+    /// constant and would close the gap, but it travels in `text.format.schema`, which serializes
+    /// *after* the messages, so it sits below the volatile job post and cannot extend the prefix.
+    ///
+    /// Padding the instructions to clear the bar would buy a 90% discount by adding the very
+    /// tokens being discounted, which is a loss. The real saving for this stage is not calling it
+    /// twice for the same capture at all - see the snapshot reuse in `analyze_latest_job`.
+    ///
+    /// This test fails if the prompt ever grows past the floor, at which point caching becomes
+    /// reachable and the comment above is stale.
+    #[test]
+    fn analysis_prompt_static_prefix_is_below_the_cache_floor() {
+        const MARKER: &str = "\nNormalized job JSON:";
+        let prompt = build_analysis_prompt(&json!({"title": "Rust Engineer"}));
+        let static_prefix = prompt.split(MARKER).next().unwrap();
+
+        // Roughly four characters per token against the provider's 1024-token floor.
+        assert!(
+            static_prefix.len() < 4 * 1024,
+            "static analysis prefix reached {} chars: it now clears the cache floor, so revisit \
+             the note above and the reuse path that stands in for caching here",
+            static_prefix.len()
+        );
+    }
+
+    /// The job post must stay strictly last. Anything volatile moved above the instructions
+    /// truncates the shared prefix to nothing.
+    #[test]
+    fn analysis_prompt_puts_the_job_post_last() {
+        let prompt = build_analysis_prompt(&json!({"title": "Rust Engineer"}));
+        let job_start = prompt.find("Rust Engineer").unwrap();
+        let instructions_end = prompt.find("Normalized job JSON:").unwrap();
+
+        assert!(
+            job_start > instructions_end,
+            "job content appeared above the instruction block"
+        );
     }
 
     #[test]

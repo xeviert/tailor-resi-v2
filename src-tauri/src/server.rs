@@ -945,6 +945,8 @@ async fn analyze_handler(
                 analysis: analysis.clone(),
                 approved_evidence: vec![],
                 priority_attested_terms: vec![],
+                // The legacy route does not carry a capture id this far.
+                capture_id: None,
             };
             match tailor_and_render(request).await {
                 Ok(response) => {

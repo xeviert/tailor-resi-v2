@@ -12,6 +12,21 @@ static SHARED_CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(300);
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
 
+/// Cache keys sent as `prompt_cache_key` on every request.
+///
+/// Prefix caching is automatic, but without this key the provider routes requests across
+/// machines by hash and a low-volume app keeps missing the warm one. The receipts under
+/// `data/api-usage/` show exactly that: calls one second apart hit 99% cached, while genuine
+/// retries ten to thirty seconds apart - well inside the cache lifetime - hit zero.
+///
+/// The key is per *stage*, deliberately not per capture or per job. Everything sharing a
+/// stage also shares that stage's constant prompt prefix, and routing them together is the
+/// entire point. Bump the trailing version whenever a stage's constant prefix text changes,
+/// so stale entries are not fought over.
+pub const PROMPT_CACHE_KEY_JOB_ANALYSIS: &str = "resume-workbench:job_analysis:v1";
+pub const PROMPT_CACHE_KEY_JOB_IMPORT: &str = "resume-workbench:job_import:v1";
+pub const PROMPT_CACHE_KEY_RESUME_TAILORING: &str = "resume-workbench:resume_tailoring:v1";
+
 pub fn shared_client() -> &'static reqwest::Client {
     SHARED_CLIENT.get_or_init(|| {
         reqwest::Client::builder()

@@ -999,45 +999,229 @@ function CoverageBreakdown({ coverage }: { coverage: AtsCoverage }) {
 }
 
 /**
- * Terms the preflight already cleared that still did not reach the document.
+ * A job keyword the finished resume does not carry.
  *
- * These are the actionable misses: nothing needs attesting, the tailoring pass simply did not
- * use them. Separating them from unsupported terms keeps the user from being asked to vouch
- * for something they had already vouched for.
+ * The fallback path below has no `TermCoverage` to hand out, so the missing-keyword block
+ * works from this narrower view rather than pretending to know a weight and a partial ratio
+ * it never read.
  */
-function UnplacedTerms({ coverage }: { coverage: AtsCoverage }) {
-  const unplaced = coverage.terms.filter(
-    (term) => term.miss_reason === 'evidence_not_placed',
+type MissingTerm = {
+  term: string;
+  coverage_ratio: number;
+};
+
+/**
+ * Splits the keywords this resume does not carry by *why* it does not carry them.
+ *
+ * `ready` is already proven - the base resume or an attested bank entry backs it - and the
+ * tailoring pass simply did not fit it in. `unproven` has nothing behind it and may not be
+ * claimed until the user says it is true. That distinction is the whole point of the block:
+ * one group is free coverage, the other is a claim about this person's life.
+ *
+ * Both come off `ats_coverage.terms` and never off `omitted_unsupported_keywords`, which the
+ * backend builds from `!covered` alone and so fills with misses of both kinds. Rendering that
+ * list beside the supported one is what used to put the same word in both blocks - under a
+ * line saying no attestation was needed, and again under one asking for exactly that.
+ *
+ * A result stored before coverage measurement existed, or a run that produced no document,
+ * has no `ats_coverage`. Those fall back to the flat list, and everything in it has to count
+ * as unproven: without the measurement there is nothing that says a term is already backed.
+ */
+function missingTerms(report: Report | null | undefined): {
+  ready: MissingTerm[];
+  unproven: MissingTerm[];
+} {
+  const terms = report?.ats_coverage?.terms;
+  if (Array.isArray(terms)) {
+    const pick = (reason: MissReason) =>
+      terms
+        .filter((term) => term.miss_reason === reason)
+        .map((term) => ({
+          term: term.term,
+          coverage_ratio: term.coverage_ratio,
+        }));
+    return {
+      ready: pick('evidence_not_placed'),
+      unproven: pick('no_evidence'),
+    };
+  }
+  const omitted = Array.isArray(report?.omitted_unsupported_keywords)
+    ? report.omitted_unsupported_keywords
+    : [];
+  return {
+    ready: [],
+    unproven: omitted.map((term) => ({ term, coverage_ratio: 0 })),
+  };
+}
+
+/**
+ * One labelled, selectable keyword group inside the missing-keyword block.
+ *
+ * Both groups are selectable and both feed the same re-run, because what separates them is
+ * what selecting *means* - permission the user already gave, or an attestation they are
+ * giving now - not whether the app is willing to act on it.
+ */
+function MissingTermGroup({
+  terms,
+  heading,
+  explanation,
+  tone,
+  selected,
+  onToggle,
+  disabled,
+  testId,
+}: {
+  terms: MissingTerm[];
+  heading: string;
+  explanation: string;
+  tone: 'ready' | 'unproven';
+  selected: Set<string>;
+  onToggle?: (term: string) => void;
+  disabled: boolean;
+  testId: string;
+}) {
+  if (terms.length === 0) return null;
+  const restingClass =
+    tone === 'ready'
+      ? 'border-[#b6cfe2] bg-[#f2f8fc] text-[#1c4f77] hover:border-[#5b7c96]'
+      : 'border-[#d6c58d] bg-[#fff9e8] text-[#6f5521] hover:border-[#aa8734]';
+  return (
+    <div className='mt-5' data-testid={testId}>
+      <p
+        className={`m-0 font-bold ${tone === 'ready' ? 'text-[#1c4f77]' : 'text-[#6f5521]'}`}
+      >
+        {heading} ({terms.length})
+      </p>
+      <p className='mt-1.5 mb-3 max-w-[780px] text-[13px] leading-relaxed text-[#627067]'>
+        {explanation}
+      </p>
+      <div className='flex flex-wrap gap-2' role='group' aria-label={heading}>
+        {terms.map((term) => {
+          const pressed = selected.has(term.term);
+          return (
+            <button
+              type='button'
+              className={`cursor-pointer rounded-full border px-3 py-1.5 text-[13px] font-bold transition-colors disabled:cursor-not-allowed disabled:opacity-65 ${
+                pressed
+                  ? 'border-[#176a46] bg-[#176a46] text-white'
+                  : restingClass
+              }`}
+              aria-pressed={pressed}
+              disabled={disabled}
+              key={term.term}
+              onClick={() => onToggle?.(term.term)}
+            >
+              {term.term}
+              {term.coverage_ratio > 0 && (
+                <span
+                  className={`font-normal ${pressed ? 'text-[#cfe6da]' : 'text-[#8a9690]'}`}
+                >
+                  {' '}
+                  - {Math.round(term.coverage_ratio * 100)}% present
+                </span>
+              )}
+            </button>
+          );
+        })}
+      </div>
+    </div>
   );
-  if (unplaced.length === 0) return null;
+}
+
+/**
+ * Every job keyword the finished resume does not carry, and what it takes to add each one.
+ *
+ * This used to be two blocks: a read-only "Supported, but not used" list and a selectable
+ * "Still not added" list. They overlapped completely, so the same word appeared twice - and
+ * the read-only block told the user that re-tailoring was the fix while offering no way to
+ * ask for it. One block with two labelled, equally selectable groups says the same thing
+ * without the contradiction.
+ */
+function MissingKeywords({
+  report,
+  selected,
+  onToggle,
+  onRetailor,
+  retailoring,
+  retailored,
+}: {
+  report: Report | null | undefined;
+  selected: Set<string>;
+  onToggle?: (term: string) => void;
+  onRetailor?: () => void;
+  retailoring: boolean;
+  retailored: boolean;
+}) {
+  const { ready, unproven } = missingTerms(report);
+  const total = ready.length + unproven.length;
+  if (total === 0) {
+    if (!retailored) return null;
+    return (
+      <p className='col-span-full m-0 border-t border-[#e7ebe7] pt-[18px] font-bold text-[#176a46]'>
+        Every job keyword this resume can truthfully carry is now in the
+        document.
+      </p>
+    );
+  }
+  const disabled = retailoring || !onToggle;
   return (
     <div
       className='col-span-full border-t border-[#e7ebe7] pt-[18px]'
-      data-testid='unplaced-terms'
+      data-testid='missing-keywords'
     >
-      <p className='m-0 font-bold text-[#1c4f77]'>
-        Supported, but not used in this resume
+      <p className='m-0 font-bold text-[#19221d]'>
+        Keywords not in this resume ({total})
       </p>
-      <p className='mt-1.5 mb-3 max-w-[780px] text-[13px] leading-relaxed text-[#627067]'>
-        Your base resume or saved evidence already backs these, so no
-        attestation is needed. Re-tailoring is what gets them placed.
+      <p className='mt-1.5 mb-0 max-w-[780px] text-[13px] leading-relaxed text-[#627067]'>
+        The job asks for these and the finished document does not contain them.
+        Tick the ones you want and run tailoring again - anything you tick
+        becomes a requirement of that run rather than a suggestion.
       </p>
-      <div className='flex flex-wrap gap-2'>
-        {unplaced.map((term) => (
-          <span
-            className='rounded-full border border-[#b6cfe2] bg-[#f2f8fc] px-3 py-1.5 text-[13px] font-bold text-[#1c4f77]'
-            key={term.term}
-          >
-            {term.term}
-            {term.coverage_ratio > 0 && (
-              <span className='font-normal text-[#5b7c96]'>
-                {' '}
-                - {Math.round(term.coverage_ratio * 100)}% present
-              </span>
-            )}
-          </span>
-        ))}
-      </div>
+      <details className='mt-2'>
+        <summary className='cursor-pointer text-[13px] font-bold text-[#176a46]'>
+          Why weren&apos;t these used already?
+        </summary>
+        <p className='mt-2 mb-0 max-w-[780px] text-[13px] leading-relaxed text-[#627067]'>
+          Approving a term at the evidence step gives the AI permission to use
+          it; it does not oblige it to. Your resume has a fixed number of
+          bullets and has to stay on one page, so each run spends that space on
+          the terms it judges most valuable and drops the rest. Ticking a
+          keyword here removes the judgement call: the next run has to place it
+          or it fails.
+        </p>
+      </details>
+      <MissingTermGroup
+        terms={ready}
+        heading='Ready to add - nothing to confirm'
+        explanation='You already have proof for these: your base resume or your saved evidence bank backs them, so claiming them is not a new claim. They are pre-selected because adding them costs you nothing.'
+        tone='ready'
+        selected={selected}
+        onToggle={onToggle}
+        disabled={disabled}
+        testId='unplaced-terms'
+      />
+      <MissingTermGroup
+        terms={unproven}
+        heading='Needs your confirmation first'
+        explanation='Nothing in your resume or evidence bank backs these, so the AI is not allowed to claim them on its own. Tick only what is genuinely true of you - that is your attestation, and it is saved to your evidence bank for future jobs.'
+        tone='unproven'
+        selected={selected}
+        onToggle={onToggle}
+        disabled={disabled}
+        testId='unproven-terms'
+      />
+      {onRetailor && (
+        <button
+          type='button'
+          className={`${primaryButtonClass} mt-4`}
+          disabled={retailoring || selected.size === 0}
+          onClick={onRetailor}
+        >
+          {retailoring
+            ? 'Re-tailoring...'
+            : `Re-run tailoring with ${selected.size} keyword${selected.size === 1 ? '' : 's'}`}
+        </button>
+      )}
     </div>
   );
 }
@@ -1066,9 +1250,6 @@ export function ResultPanel({
   const report = resume.report;
   const contentChanges = Array.isArray(resume.content_changes)
     ? resume.content_changes
-    : [];
-  const omittedKeywords = Array.isArray(report?.omitted_unsupported_keywords)
-    ? report.omitted_unsupported_keywords
     : [];
   const replacedBullets = (report?.bullet_rewrite_decisions ?? [])
     .filter((decision) => decision.outcome === 'replaced')
@@ -1238,59 +1419,14 @@ export function ResultPanel({
           </ul>
         </div>
       )}
-      {report?.ats_coverage && <UnplacedTerms coverage={report.ats_coverage} />}
-      {omittedKeywords.length > 0 && (
-        <div className='col-span-full border-t border-[#e7ebe7] pt-[18px]'>
-          <p className='m-0 font-bold text-[#6f5521]'>Still not added</p>
-          <p className='mt-1.5 mb-3 max-w-[780px] text-[13px] leading-relaxed text-[#627067]'>
-            Select only claims that are true. Your selection authorizes the AI
-            to place each claim in the most plausible existing role and replace
-            a lower-value bullet while preserving the locked layout.
-          </p>
-          <div
-            className='flex flex-wrap gap-2'
-            aria-label='Omitted ATS phrases'
-          >
-            {omittedKeywords.map((term) => {
-              const pressed = selectedOmittedTerms.has(term);
-              return (
-                <button
-                  type='button'
-                  className={`cursor-pointer rounded-full border px-3 py-1.5 text-[13px] font-bold transition-colors disabled:cursor-not-allowed disabled:opacity-65 ${
-                    pressed
-                      ? 'border-[#176a46] bg-[#176a46] text-white'
-                      : 'border-[#d6c58d] bg-[#fff9e8] text-[#6f5521] hover:border-[#aa8734]'
-                  }`}
-                  aria-pressed={pressed}
-                  disabled={retailoring || !onToggleOmittedTerm}
-                  key={term}
-                  onClick={() => onToggleOmittedTerm?.(term)}
-                >
-                  {term}
-                </button>
-              );
-            })}
-          </div>
-          {onRetailor && (
-            <button
-              type='button'
-              className={`${primaryButtonClass} mt-4`}
-              disabled={retailoring || selectedOmittedTerms.size === 0}
-              onClick={onRetailor}
-            >
-              {retailoring
-                ? 'Re-tailoring...'
-                : `Re-tailor selected (${selectedOmittedTerms.size})`}
-            </button>
-          )}
-        </div>
-      )}
-      {omittedKeywords.length === 0 && resume.retailor && (
-        <p className='col-span-full m-0 border-t border-[#e7ebe7] pt-[18px] font-bold text-[#176a46]'>
-          Every job keyword this resume can truthfully carry is now in the
-          document.
-        </p>
-      )}
+      <MissingKeywords
+        report={report}
+        selected={selectedOmittedTerms}
+        onToggle={onToggleOmittedTerm}
+        onRetailor={onRetailor}
+        retailoring={retailoring}
+        retailored={Boolean(resume.retailor)}
+      />
       {resume.tailored_content !== null && (
         <div className='contents' data-testid='completion-json-changes'>
           <TailoringChanges
@@ -1634,7 +1770,13 @@ export function App() {
           }
         : null,
     );
-    setSelectedOmittedTerms(new Set());
+    // The evidence-backed misses start selected. They are free, truthful coverage the run
+    // already had permission to use and dropped anyway, so having to hunt for them and tick
+    // them one by one puts the work on the wrong side: the safe outcome should be the default
+    // one, and the user only has to act to *decline* it.
+    setSelectedOmittedTerms(
+      new Set(missingTerms(accepted.resume?.report).ready.map((term) => term.term)),
+    );
     setError('');
     return true;
   }
@@ -1988,8 +2130,8 @@ export function App() {
     });
     return () => window.cancelAnimationFrame(frame);
   }, [outcome]);
-  async function analyze() {
-    console.info('[ui-result] analysis command started', { language });
+  async function analyze(force = false) {
+    console.info('[ui-result] analysis command started', { language, force });
     const commandCapture = captureRef.current;
     if (!commandCapture) {
       setError('The captured job is unavailable. Capture the job again.');
@@ -2004,6 +2146,7 @@ export function App() {
     try {
       const next = await invoke<PreflightResult>('analyze_latest_job', {
         language,
+        force,
       });
       console.info('[ui-result] analysis command resolved');
       applyPreflight(next);
@@ -2532,7 +2675,7 @@ export function App() {
               <button
                 className={`${primaryButtonClass} max-[680px]:w-full self-center`}
                 disabled={running || languageChanging}
-                onClick={preflight ? generate : analyze}
+                onClick={preflight ? generate : () => void analyze()}
               >
                 {languageChanging
                   ? 'Preparing language...'
@@ -2546,6 +2689,18 @@ export function App() {
                           'Re-run tailoring'
                         : 'Generate tailored PDF'}
               </button>
+              {preflight && (
+                <button
+                  className={`${secondaryButtonClass} max-[680px]:w-full self-center`}
+                  data-testid='re-analyze'
+                  disabled={running || languageChanging}
+                  onClick={() => void analyze(true)}
+                  title='Analyze this job post again instead of reusing the stored analysis.'
+                  type='button'
+                >
+                  Re-analyze job
+                </button>
+              )}
               {result && (
                 <button
                   className={`${secondaryButtonClass} max-[680px]:w-full self-center`}

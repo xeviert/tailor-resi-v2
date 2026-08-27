@@ -92,6 +92,17 @@ must stay out of the resume.
    the same prose as `description` wrapped in markup. Analysis retries a
    transient rate limit or server fault; every other error is terminal.
 
+   An analysis already stored for this capture is reused instead of bought
+   twice. The analysis prompt never sees the output language, so one analysis
+   serves both EN and FR — which is why switching language has always reused it
+   — and keying the lookup on the capture is what makes reuse safe: a different
+   job post is a different capture and cannot match, so what comes back is
+   always an analysis of the post on screen. A stored analysis with no summary,
+   which is what a failed run leaves behind, is never reused. Evidence preflight
+   still runs fresh every time, because the evidence bank does change. **Re-analyze
+   job** on the review screen forces a new call when the stored analysis itself
+   is what looks wrong.
+
    Analysis reports its two stages — `ats_analysis` and `evidence_preflight` —
    through the same `resume-pipeline-progress` event the document pipeline uses,
    so the review screen shows a live stage list, an elapsed counter, and a
@@ -172,12 +183,17 @@ must stay out of the resume.
      report.
    - `safety_validation`: verify locked JSON shape and factual constraints, ensure
      every experience bullet was actually rewritten, and require at least one
-     replacement. Replacements also face length and prose checks that reject a
+     replacement. A shape or locked-field violation is handed back to the model as
+     a correction rather than ending the run, so a response that has already been
+     billed gets a chance to be fixed instead of being discarded — the constraint
+     is unchanged, only the point at which the run gives up. Replacements also face length and prose checks that reject a
      keyword-stuffed, overlong, or too-short bullet, because the DOCX layout is
      locked to one page. A rejected response is sent back to the model for
      correction within the attempt limit. Once a response is accepted, this stage
      measures ATS keyword coverage of the generated content and rebuilds the
-     report's covered/omitted lists from that measurement.
+     report's covered/omitted lists from that measurement. If that measurement shows
+     the model dropped a high-weight keyword this person can already prove, the first
+     attempt hands those terms back and asks once more - see "ATS Coverage Scoring".
    - `variant_write`: save the job-specific variant under `resume/variants/`.
    - `docx_render`: render the locked-layout DOCX using the existing resume
      PowerShell pipeline.
@@ -192,8 +208,8 @@ must stay out of the resume.
 6. Receive the result, artifacts, and analysis summary.
 
    The UI receives a persisted pipeline result and shows the analysis summary,
-   measured ATS coverage, changed fields, omitted keywords, and available artifact
-   actions. Successful variants include `variant.json`, `tailoring-report.json`,
+   measured ATS coverage, changed fields, the keywords the resume still does not
+   carry, and available artifact actions. Successful variants include `variant.json`, `tailoring-report.json`,
    the rendered DOCX, and usually a one-page PDF.
 
    The summary is headed by the job it belongs to - the captured title, the company,
@@ -222,17 +238,45 @@ must stay out of the resume.
    artifact gets an `artifact-manifest.json` provenance file in its variant
    directory.
 
-7. Optionally re-tailor from omitted terms.
+7. Optionally re-run tailoring on the keywords it missed.
 
-   After a completed or partial run, omitted unsupported keywords are shown as
-   selectable pills. If the user selects one or more omitted terms and clicks
-   **Re-tailor selected**, the UI invokes `retailor_resume_with_evidence`.
+   After a completed or partial run the summary shows one **Keywords not in this
+   resume** block. It is built from the measured coverage described below, and it
+   splits the misses by *why* the document does not carry them:
+
+   - **Ready to add - nothing to confirm** (`evidence_not_placed`): the base resume
+     or a saved evidence-bank entry already backs these, so claiming them is not a
+     new claim. They arrive **pre-selected**, because this is coverage the user
+     already owns and declining it should be the action that costs a click.
+   - **Needs your confirmation first** (`no_evidence`): nothing supports these, so
+     the AI may not claim them. Ticking one is the attestation, and it is saved to
+     the evidence bank for future jobs.
+
+   Both groups are selectable and both feed the same **Re-run tailoring with N
+   keywords** button, which invokes `retailor_resume_with_evidence`. A short
+   disclosure beside them answers the question the block used to raise and not
+   answer: approving a term at the evidence step is permission, not obligation - the
+   resume has a fixed bullet count and one page to spend - and ticking a keyword here
+   is what turns it into a hard requirement of the next run.
+
+   These were two blocks, and they overlapped completely: the selectable list is
+   rebuilt from `omitted_unsupported_keywords`, which is filtered on `!covered`
+   alone, so every already-supported miss also appeared as a pill asking the user to
+   vouch for it. The panel reads `miss_reason` off `ats_coverage.terms` instead, and
+   falls back to the flat list only for a result stored before coverage measurement
+   existed - where, with no measurement, everything has to count as unproven.
 
    Re-tailoring loads the previous source variant and analysis, validates that the
    selected terms came from the source result's omitted list, records them as
    user-attested placement terms, and reruns the same tailoring and document
    pipeline. The result records the source variant, previous score, and selected
    terms so the UI can show the score delta.
+
+   Selecting an already-supported term does not write an evidence-bank entry for it.
+   The bank is permanent and every future job reads it, so recording an attestation
+   for a claim the base resume already makes would fill it with claims the user was
+   never asked to give. Both kinds still travel as placement terms, so what the model
+   is required to place is the same either way.
 
    Placement is checked against each bullet on its own, not against all of them
    joined together. A phrase whose words happen to be scattered one apiece across
@@ -280,12 +324,25 @@ is not credited to the tailoring pass.
 Every miss is classified:
 
 - `no_evidence`: nothing in the base resume or the evidence bank supports it. The
-  user must attest to it before it can be claimed. These become the selectable
-  pills in the "Still not added" block.
+  user must attest to it before it can be claimed.
 - `evidence_not_placed`: the preflight already cleared it and the tailoring pass
-  still did not use it. This is free, truthful coverage that was left on the table,
-  and the UI lists it separately so the user is never asked to vouch for something
-  they have already vouched for.
+  still did not use it. This is free, truthful coverage that was left on the table.
+
+Both kinds land in `omitted_unsupported_keywords`, which is filtered on `!covered`
+and nothing else. The summary screen therefore reads `miss_reason` directly rather
+than that list; using the list for the "needs attestation" side is what used to ask
+the user to vouch for terms the block above had just told them were already backed.
+
+A high-weight `evidence_not_placed` miss also costs the run one extra attempt.
+Approval at the evidence step is permission, not obligation - the prompt asks the
+model to incorporate supported terms "aggressively" and nothing enforced it, so
+proven coverage was dropped in silence and the user was left to go and fetch it by
+hand. After coverage is measured, the first attempt hands those terms back to the
+model as a correction and asks again. It fires once, only on the first attempt, so
+the rest of the budget stays with the validators; it applies at weight 4 and above,
+because a whole generation is too expensive to spend on something the post itself
+called optional; and it never fails the run - if the second response drops them too,
+that is the answer and the run proceeds.
 
 `covered_keywords` and `omitted_unsupported_keywords` in the tailoring report are
 rebuilt from this measurement. The model also emits its own
@@ -318,10 +375,13 @@ response includes `result_protocol_version`; a mismatch tells the user to fully
 restart the desktop app instead of silently running an incompatible UI/backend
 pair.
 
-Successful OpenAI calls also write usage-only receipts under `data/api-usage/` so
-future token and cost investigations can be tied to the `job_import`,
-`job_analysis`, or tailoring stage without persisting API keys or prompt
-contents. A URL import that found JSON-LD writes no receipt at all, because it
+OpenAI calls also write usage-only receipts under `data/api-usage/` so future token
+and cost investigations can be tied to the `job_import`, `job_analysis`, or tailoring
+stage without persisting API keys or prompt contents. A receipt is written before the
+response is parsed, so a refused, truncated, or malformed response — billed like any
+other — still appears in the ledger. Each one carries the capture it was serving and,
+for tailoring, which attempt it was, so a receipt can be joined to its run rather than
+guessed at by timestamp. A URL import that found JSON-LD writes no receipt at all, because it
 never called a model.
 
 ## Desktop UI and Linux
@@ -354,6 +414,32 @@ an in-app Settings flow backed by the operating system's secure credential store
 - `OPENAI_MODEL` controls job-post analysis and defaults to `gpt-5.6-luna`.
 - `OPENAI_TAILOR_MODEL` independently controls resume tailoring and defaults to `gpt-5.6-terra`.
 - `OPENAI_BASE_URL` is optional and overrides the default OpenAI API base URL (`https://api.openai.com/v1`).
+
+### Prompt caching
+
+Cached input bills at a fraction of the normal rate, but only for a prefix that is
+byte-identical to a recent request and at least 1024 tokens long. Both stages send a
+`prompt_cache_key` per stage — not per job — because everything sharing a stage also
+shares that stage's constant prefix, and routing them together is the point. Bump the
+version in those keys (`src-tauri/src/http.rs`) whenever a stage's constant text changes.
+
+The tailoring prompt is therefore built in three zones, most-constant first: the
+instruction text and base resume, then the per-job language, job post, analysis and
+matched evidence, then the per-attempt retry feedback. Nothing volatile may move above
+something constant, or the constant text below it stops being a shared prefix and is
+billed in full on every call. `tailoring_prompt_keeps_a_stable_cacheable_prefix` is the
+guard; if it fails, the prompt edit is what needs revisiting.
+
+Analysis gets no discount from this and is not expected to. Its instructions come to
+roughly 650 tokens, under the floor, and the constant output schema travels in
+`text.format.schema`, which serializes below the volatile job post and so cannot extend
+the prefix. Padding the instructions to clear the bar would buy the discount by adding
+the very tokens being discounted. Reusing the stored analysis, above, is what saves money
+in that stage instead.
+
+`python scripts/api-usage-report.py` summarizes the receipts under `data/api-usage/` by
+stage, including cache hit rate; `--runs` groups by capture so the retries behind a single
+resume are visible.
 
 ## Resume Documents
 

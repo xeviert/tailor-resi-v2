@@ -2,14 +2,14 @@ use crate::{
     analysis::{analyze_job, AnalysisConfig, JobAnalysis},
     error::AppError,
     evidence::{
-        append_banked_terms, approved_evidence_for, infer_selected_term_kind, load_evidence_bank,
+        append_banked_terms, approved_evidence_for, equivalent_terms, infer_selected_term_kind,
+        load_evidence_bank,
         preflight_items, remove_evidence, save_selected_evidence, EvidenceBank, EvidenceEntry,
         PreflightItem, SelectedEvidence,
     },
     job_import::{import_from_text, import_from_url, ImportedJob},
     server::{
-        capture_directory, load_latest_capture, persist_capture, remove_latest_capture,
-        CapturedJob,
+        capture_directory, load_latest_capture, persist_capture, remove_latest_capture, CapturedJob,
     },
     tailoring::{
         content_changes, failed_response, load_base_resume, publish_variant_artifact,
@@ -199,6 +199,37 @@ pub struct RetailorResumeRequest {
     pub selected_terms: Vec<String>,
 }
 
+/// The selected terms that are actually an attestation, as evidence records to bank.
+///
+/// The summary screen lets both kinds of miss be selected: terms nothing supports, and terms the
+/// preflight already cleared that the tailoring pass simply did not place. Only the first kind is
+/// the user vouching for something. Banking the second would record this person swearing to a
+/// claim their own base resume already makes - and the bank is permanent and shared by every
+/// future job, so it would quietly fill up with attestations they were never asked for.
+///
+/// Both kinds still travel as `priority_attested_terms`, so what the model is required to place
+/// is unaffected by this filter.
+fn attestable_selection(
+    analysis: &JobAnalysis,
+    preflight: &[PreflightItem],
+    selected_terms: &[String],
+) -> Vec<SelectedEvidence> {
+    selected_terms
+        .iter()
+        .filter(|term| {
+            !preflight.iter().any(|item| {
+                item.resolution == "auto_available" && equivalent_terms(&item.term, term)
+            })
+        })
+        .map(|term| SelectedEvidence {
+            term: term.clone(),
+            kind: infer_selected_term_kind(analysis, term),
+            proof_note: None,
+            allow_model_role_placement: true,
+        })
+        .collect()
+}
+
 fn validate_selected_omitted_terms(
     selected_terms: &[String],
     omitted_terms: &[&str],
@@ -335,6 +366,7 @@ pub async fn run_resume_pipeline(
             analysis: analysis.clone(),
             approved_evidence: vec![],
             priority_attested_terms: vec![],
+            capture_id: Some(capture_id),
         },
         Some(&reporter),
     )
@@ -430,10 +462,31 @@ fn finish_import(app: &AppHandle, imported: ImportedJob) -> Result<CapturedJob, 
     Ok(captured)
 }
 
+/// A `JobAnalysis` already stored for this capture, in either language.
+///
+/// Returns `None` for anything unreadable or belonging to another capture, so a caller simply
+/// falls through to a fresh analysis instead of having to tell "no snapshot" from "bad snapshot".
+fn stored_analysis_for_capture(capture_id: u64) -> Option<JobAnalysis> {
+    let stored = get_latest_pipeline_result_any_language(capture_id)
+        .ok()
+        .flatten()?;
+    usable_stored_analysis(stored.analysis)
+}
+
+/// Whether a stored `analysis` value is worth reusing instead of re-calling the model.
+fn usable_stored_analysis(stored: serde_json::Value) -> Option<JobAnalysis> {
+    let analysis = serde_json::from_value::<JobAnalysis>(stored).ok()?;
+    // A failed run stores a placeholder analysis next to its error, and an older snapshot can
+    // predate fields this build needs. Reusing either would pin the capture to a result no
+    // amount of re-analyzing could clear, so anything without a summary goes back to the model.
+    (!analysis.summary.trim().is_empty()).then_some(analysis)
+}
+
 #[tauri::command]
 pub async fn analyze_latest_job(
     app: AppHandle,
     language: String,
+    force: bool,
 ) -> Result<PreflightResult, AppError> {
     // Analysis used to run silently: the review screen only mounts its progress panel once
     // an event has arrived, so a call that can legitimately take minutes showed nothing but
@@ -459,70 +512,90 @@ pub async fn analyze_latest_job(
         attempt: None,
         total_attempts: None,
     });
-    let config = match AnalysisConfig::from_env() {
-        Some(config) => config,
-        None => {
-            let message = "OPENAI_API_KEY is required to analyze a resume.".to_string();
-            reporter(PipelineProgress {
-                stage: "ats_analysis",
-                status: "failed",
-                message: message.clone(),
-                attempt: None,
-                total_attempts: None,
-            });
-            store_and_emit_outcome(
-                &app,
-                &root,
-                capture_id,
-                &language,
-                "failed",
-                failure_summary("ats_analysis", &message, None),
-                None,
-                None,
-                Some("ats_analysis"),
-                Some(message.clone()),
-            )?;
-            return Err(AppError::Message(message));
-        }
+    // A stored analysis for this exact capture is reused rather than paid for twice.
+    //
+    // `build_analysis_prompt` never sees the output language, so one analysis serves both EN and
+    // FR - which is why `prepare_evidence_preflight` has always reused it on a language switch.
+    // Keying on the capture is what makes reuse safe: a different job post is a different
+    // capture and cannot match, so what comes back is always an analysis of the post on screen.
+    // The preflight below still runs fresh every time, because the evidence bank does change.
+    let reused_analysis = if force {
+        None
+    } else {
+        stored_analysis_for_capture(capture_id)
     };
-    let analysis = match analyze_job(&config, &captured.parsed).await {
-        Ok(analysis) => analysis,
-        Err(error) => {
-            let message = error.to_string();
-            reporter(PipelineProgress {
-                stage: "ats_analysis",
-                status: "failed",
-                message: message.clone(),
-                attempt: None,
-                total_attempts: None,
-            });
-            store_and_emit_outcome(
-                &app,
-                &root,
-                capture_id,
-                &language,
-                "failed",
-                failure_summary("ats_analysis", &message, None),
-                None,
-                None,
-                Some("ats_analysis"),
-                Some(message.clone()),
-            )?;
-            return Err(AppError::Message(message));
+    let reused = reused_analysis.is_some();
+    let analysis = if let Some(analysis) = reused_analysis {
+        analysis
+    } else {
+        let config = match AnalysisConfig::from_env() {
+            Some(config) => config,
+            None => {
+                let message = "OPENAI_API_KEY is required to analyze a resume.".to_string();
+                reporter(PipelineProgress {
+                    stage: "ats_analysis",
+                    status: "failed",
+                    message: message.clone(),
+                    attempt: None,
+                    total_attempts: None,
+                });
+                store_and_emit_outcome(
+                    &app,
+                    &root,
+                    capture_id,
+                    &language,
+                    "failed",
+                    failure_summary("ats_analysis", &message, None),
+                    None,
+                    None,
+                    Some("ats_analysis"),
+                    Some(message.clone()),
+                )?;
+                return Err(AppError::Message(message));
+            }
+        };
+        match analyze_job(&config, &captured.parsed).await {
+            Ok(analysis) => analysis,
+            Err(error) => {
+                let message = error.to_string();
+                reporter(PipelineProgress {
+                    stage: "ats_analysis",
+                    status: "failed",
+                    message: message.clone(),
+                    attempt: None,
+                    total_attempts: None,
+                });
+                store_and_emit_outcome(
+                    &app,
+                    &root,
+                    capture_id,
+                    &language,
+                    "failed",
+                    failure_summary("ats_analysis", &message, None),
+                    None,
+                    None,
+                    Some("ats_analysis"),
+                    Some(message.clone()),
+                )?;
+                return Err(AppError::Message(message));
+            }
         }
     };
     reporter(PipelineProgress {
         stage: "ats_analysis",
         status: "completed",
-        message: "ATS analysis completed.".to_string(),
+        message: if reused {
+            "Reused the analysis already stored for this job.".to_string()
+        } else {
+            "ATS analysis completed.".to_string()
+        },
         attempt: None,
         total_attempts: None,
     });
     reporter(PipelineProgress {
         stage: "evidence_preflight",
         status: "started",
-        message: "Matching analyzed terms against the base resume and evidence bank."
-            .to_string(),
+        message: "Matching analyzed terms against the base resume and evidence bank.".to_string(),
         attempt: None,
         total_attempts: None,
     });
@@ -683,6 +756,7 @@ pub async fn generate_tailored_resume(
             analysis: request.analysis,
             approved_evidence,
             priority_attested_terms: vec![],
+            capture_id: Some(capture_id),
         },
         Some(&reporter),
     )
@@ -793,19 +867,23 @@ pub async fn retailor_resume_with_evidence(
 
     let analysis: JobAnalysis = serde_json::from_value(stored.analysis.clone())
         .map_err(|error| AppError::Message(format!("Stored job analysis is invalid: {error}")))?;
-    let selected_evidence = selected_terms
-        .iter()
-        .map(|term| SelectedEvidence {
-            term: term.clone(),
-            kind: infer_selected_term_kind(&analysis, term),
-            proof_note: None,
-            allow_model_role_placement: true,
-        })
-        .collect::<Vec<_>>();
-    let bank = save_selected_evidence(&root, &selected_evidence)
-        .map_err(|error| AppError::Message(error.to_string()))?;
     let base_resume = load_base_resume(&root, &request.language)
         .map_err(|error| AppError::Message(error.to_string()))?;
+    let existing_bank = load_evidence_bank(&root).unwrap_or_else(|error| {
+        eprintln!("[evidence] Re-tailoring without the existing bank: {error}");
+        EvidenceBank::default()
+    });
+    let selected_evidence = attestable_selection(
+        &analysis,
+        &preflight_items(&analysis, &base_resume, &existing_bank),
+        &selected_terms,
+    );
+    let bank = if selected_evidence.is_empty() {
+        existing_bank
+    } else {
+        save_selected_evidence(&root, &selected_evidence)
+            .map_err(|error| AppError::Message(error.to_string()))?
+    };
     let preflight = preflight_items(&analysis, &base_resume, &bank);
     let mut approved_evidence = approved_evidence_for(&preflight, &bank, &selected_evidence);
     append_banked_terms(&mut approved_evidence, &bank, &selected_terms);
@@ -831,6 +909,7 @@ pub async fn retailor_resume_with_evidence(
             analysis: analysis.clone(),
             approved_evidence,
             priority_attested_terms: selected_terms.clone(),
+            capture_id: Some(capture_id),
         },
         Some(&reporter),
     )
@@ -1327,13 +1406,66 @@ pub fn reveal_result_artifact(
 #[cfg(test)]
 mod tests {
     use super::{
-        failure_summary, normalize_stored_result, persist_pipeline_result,
-        prepare_preflight_result, recover_pipeline_result, validate_selected_omitted_terms,
-        StoredPipelineResult,
+        attestable_selection, failure_summary, normalize_stored_result, persist_pipeline_result,
+        prepare_preflight_result, recover_pipeline_result, usable_stored_analysis,
+        validate_selected_omitted_terms, StoredPipelineResult,
     };
     use crate::analysis::JobAnalysis;
+    use crate::evidence::PreflightItem;
     use crate::tailoring::TailoringReport;
     use serde_json::json;
+
+    fn preflight_item(term: &str, resolution: &'static str) -> PreflightItem {
+        PreflightItem {
+            term: term.to_string(),
+            kind: "technology".to_string(),
+            importance: 5,
+            source: "evidence_bank",
+            resolution,
+            resolution_reason: "test",
+            matched_term: Some(term.to_string()),
+            proof_note: None,
+            eligible_for_bullets: true,
+            allow_model_role_placement: true,
+        }
+    }
+
+    /// Selecting a term the preflight already cleared is a request to place it, not a promise
+    /// that it is true - the base resume or an existing bank entry already said so. Banking it
+    /// again would write an attestation this person was never asked to give, into a file every
+    /// future job reads.
+    #[test]
+    fn an_already_supported_selection_is_not_banked_as_an_attestation() {
+        let analysis: JobAnalysis = serde_json::from_value(json!({
+            "role_target": "Engineer",
+            "seniority": "Senior",
+            "core_keywords": [],
+            "required_skills": ["Kubernetes", "Terraform"],
+            "preferred_skills": [],
+            "tools_and_platforms": [],
+            "domain_terms": [],
+            "responsibility_phrases": [],
+            "achievement_angles": [],
+            "ats_phrase_bank": [],
+            "must_not_claim_without_evidence": [],
+            "term_variants": [],
+            "summary": "test"
+        }))
+        .unwrap();
+        let preflight = vec![
+            preflight_item("Kubernetes", "auto_available"),
+            preflight_item("Terraform", "confirmation_required"),
+        ];
+        let selected = vec!["Kubernetes".to_string(), "Terraform".to_string()];
+
+        let banked = attestable_selection(&analysis, &preflight, &selected);
+
+        let terms = banked
+            .iter()
+            .map(|entry| entry.term.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(terms, vec!["Terraform"]);
+    }
 
     fn temporary_root(label: &str) -> std::path::PathBuf {
         let suffix = std::time::SystemTime::now()
@@ -1341,6 +1473,28 @@ mod tests {
             .unwrap()
             .as_nanos();
         std::env::temp_dir().join(format!("resume-{label}-{suffix}"))
+    }
+
+    /// Reuse has to be able to say no. A failed run persists a placeholder analysis beside its
+    /// error, and reusing that would leave the capture stuck on a result the user cannot get out
+    /// of by analyzing again - the one action that looks like it should fix it.
+    #[test]
+    fn a_stored_analysis_without_a_summary_is_not_reused() {
+        assert!(usable_stored_analysis(json!(null)).is_none());
+        assert!(usable_stored_analysis(json!({})).is_none());
+
+        let mut placeholder = serde_json::to_value(sample_analysis()).unwrap();
+        placeholder["summary"] = json!("   ");
+        assert!(usable_stored_analysis(placeholder).is_none());
+    }
+
+    #[test]
+    fn a_complete_stored_analysis_is_reused() {
+        let stored = serde_json::to_value(sample_analysis()).unwrap();
+        let reused = usable_stored_analysis(stored).expect("a complete analysis is reusable");
+
+        assert_eq!(reused.summary, sample_analysis().summary);
+        assert_eq!(reused.required_skills, sample_analysis().required_skills);
     }
 
     fn sample_analysis() -> JobAnalysis {

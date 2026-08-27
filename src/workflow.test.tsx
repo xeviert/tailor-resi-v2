@@ -226,6 +226,83 @@ describe('review-to-tailoring workflow', () => {
     expect(screen.getByText('Unique captured job description.')).toBeVisible();
   });
 
+  it('arrives with the already-proven misses selected and the re-run ready', async () => {
+    const base = completedResume();
+    const sourceResume = {
+      ...base,
+      report: {
+        ...base.report,
+        ats_coverage: {
+          score: 73,
+          covered_weight: 10,
+          total_weight: 20,
+          editable_covered_weight: 8,
+          categories: [],
+          terms: [
+            {
+              term: 'Angular in experience',
+              kind: 'technology',
+              group: 'required',
+              weight: 5,
+              covered: false,
+              coverage_ratio: 0,
+              in_editable_surface: false,
+              miss_reason: 'evidence_not_placed' as const,
+            },
+            {
+              term: 'GCP in experience',
+              kind: 'technology',
+              group: 'required',
+              weight: 5,
+              covered: false,
+              coverage_ratio: 0,
+              in_editable_surface: false,
+              miss_reason: 'no_evidence' as const,
+            },
+          ],
+        },
+      },
+    };
+    mocks.invoke.mockImplementation((command: string) => {
+      switch (command) {
+        case 'get_latest_job':
+          return Promise.resolve(captured);
+        case 'get_latest_pipeline_result_any_language':
+          return Promise.resolve({
+            schema_version: 2,
+            capture_received_at_ms: 42,
+            language: 'en',
+            recovered_from_artifacts: false,
+            status: 'completed',
+            summary: analysis.summary,
+            failed_stage: null,
+            error: null,
+            analysis,
+            resume: sourceResume,
+          });
+        case 'get_evidence_bank':
+          return Promise.resolve({ version: 2, entries: [] });
+        default:
+          return Promise.resolve(null);
+      }
+    });
+    render(<App />);
+
+    // Coverage this person can already prove costs them nothing, so declining it should be the
+    // action that takes a click - not claiming it. Landing on the summary with an inert button
+    // and a list of terms the run "could have used" is what made the block read as a report
+    // rather than as something to do.
+    expect(
+      await screen.findByRole('button', { name: 'Angular in experience' }),
+    ).toHaveAttribute('aria-pressed', 'true');
+    expect(
+      screen.getByRole('button', { name: 'GCP in experience' }),
+    ).toHaveAttribute('aria-pressed', 'false');
+    expect(
+      screen.getByRole('button', { name: 'Re-run tailoring with 1 keyword' }),
+    ).toBeEnabled();
+  });
+
   it('re-tailors selected omitted pills from the recovered analysis result', async () => {
     const sourceResume = completedResume();
     const retailoredResume = {
@@ -270,7 +347,7 @@ describe('review-to-tailoring workflow', () => {
     });
     fireEvent.click(angular);
     fireEvent.click(
-      screen.getByRole('button', { name: 'Re-tailor selected (1)' }),
+      screen.getByRole('button', { name: 'Re-run tailoring with 1 keyword' }),
     );
 
     await waitFor(() =>
@@ -328,7 +405,7 @@ describe('review-to-tailoring workflow', () => {
     });
     fireEvent.click(angular);
     fireEvent.click(
-      screen.getByRole('button', { name: 'Re-tailor selected (1)' }),
+      screen.getByRole('button', { name: 'Re-run tailoring with 1 keyword' }),
     );
 
     expect(await screen.findByText(/Re-tailoring failed:/)).toHaveTextContent(

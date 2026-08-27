@@ -296,7 +296,7 @@ describe('always-visible run summary', () => {
     ).toHaveAttribute('aria-pressed', 'false');
     fireEvent.click(angular);
     expect(onToggle).toHaveBeenCalledWith('Angular in experience');
-    fireEvent.click(screen.getByRole('button', { name: 'Re-tailor selected (1)' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Re-run tailoring with 1 keyword' }));
     expect(onRetailor).toHaveBeenCalledOnce();
     expect(screen.getByTestId('retailor-score-delta')).toHaveTextContent(
       'Previous 73 → current 81 (+8)',
@@ -540,25 +540,58 @@ describe('measured ATS coverage', () => {
     expect(screen.queryByTestId('coverage-breakdown')).toBeNull();
   });
 
-  it('separates supported-but-unplaced terms from terms needing attestation', () => {
+  it('never lists the same term as both supported and needing attestation', () => {
     const resume = {
       ...completedResume(),
       report: {
         estimated_ats_coverage_score: 91,
         ats_coverage: coverage,
-        omitted_unsupported_keywords: ['Kubernetes'],
+        // What the backend actually emits: `covered_and_omitted` filters on `!covered` alone,
+        // so this list carries misses of *both* kinds. Rendering it as the selectable block put
+        // GraphQL under "no attestation needed" and then asked the user to attest to it two
+        // lines later. The panel reads `miss_reason` instead, and this list must not matter.
+        omitted_unsupported_keywords: ['Kubernetes', 'GraphQL'],
       },
     };
     render(<ResultPanel result={{ analysis, resume }} action={vi.fn()} />);
 
-    // GraphQL is already backed by evidence, so it must not be presented as something the
-    // user has to vouch for.
-    const unplaced = screen.getByTestId('unplaced-terms');
-    expect(unplaced).toHaveTextContent('GraphQL');
-    expect(unplaced).not.toHaveTextContent('Kubernetes');
+    const supported = screen.getByTestId('unplaced-terms');
+    const unproven = screen.getByTestId('unproven-terms');
+    expect(supported).toHaveTextContent('GraphQL');
+    expect(supported).not.toHaveTextContent('Kubernetes');
+    expect(unproven).toHaveTextContent('Kubernetes');
+    expect(unproven).not.toHaveTextContent('GraphQL');
+  });
+
+  it('offers both kinds of miss to the same re-run', () => {
+    const resume = {
+      ...completedResume(),
+      report: {
+        estimated_ats_coverage_score: 91,
+        ats_coverage: coverage,
+        omitted_unsupported_keywords: [],
+      },
+    };
+    const onToggle = vi.fn();
+    render(
+      <ResultPanel
+        result={{ analysis, resume }}
+        action={vi.fn()}
+        selectedOmittedTerms={new Set(['GraphQL'])}
+        onToggleOmittedTerm={onToggle}
+        onRetailor={vi.fn()}
+      />,
+    );
+
+    // The supported block used to be read-only while telling the user that re-tailoring was
+    // what would place these - naming the fix and then withholding it.
+    fireEvent.click(screen.getByRole('button', { name: /^GraphQL/ }));
+    expect(onToggle).toHaveBeenCalledWith('GraphQL');
+    fireEvent.click(screen.getByRole('button', { name: 'Kubernetes' }));
+    expect(onToggle).toHaveBeenCalledWith('Kubernetes');
     expect(
-      screen.getByRole('button', { name: 'Kubernetes' }),
-    ).toBeVisible();
+      screen.getByRole('button', { name: 'Re-run tailoring with 1 keyword' }),
+    ).toBeEnabled();
   });
 
   it('omits the unplaced block when every supported term was used', () => {
