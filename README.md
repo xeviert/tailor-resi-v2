@@ -420,22 +420,50 @@ an in-app Settings flow backed by the operating system's secure credential store
 Cached input bills at a fraction of the normal rate, but only for a prefix that is
 byte-identical to a recent request and at least 1024 tokens long. Both stages send a
 `prompt_cache_key` per stage — not per job — because everything sharing a stage also
-shares that stage's constant prefix, and routing them together is the point. Bump the
-version in those keys (`src-tauri/src/http.rs`) whenever a stage's constant text changes.
+shares that stage's constant prefix, and routing them together is the point. The key only
+influences routing, though: it does not pin a machine and it does not by itself make
+anything cacheable. Bump the version in those keys (`src-tauri/src/http.rs`) whenever a
+stage's constant text changes.
 
-The tailoring prompt is therefore built in three zones, most-constant first: the
-instruction text and base resume, then the per-job language, job post, analysis and
-matched evidence, then the per-attempt retry feedback. Nothing volatile may move above
-something constant, or the constant text below it stops being a shared prefix and is
-billed in full on every call. `tailoring_prompt_keeps_a_stable_cacheable_prefix` is the
-guard; if it fails, the prompt edit is what needs revisiting.
+The tailoring prompt is built in three zones, most-constant first: the instruction text and
+base resume, then the per-job language, job post, analysis and matched evidence, then the
+per-attempt retry feedback. Nothing volatile may move above something constant.
+`tailoring_prompt_keeps_a_stable_cacheable_prefix` is the guard.
 
-Analysis gets no discount from this and is not expected to. Its instructions come to
-roughly 650 tokens, under the floor, and the constant output schema travels in
-`text.format.schema`, which serializes below the volatile job post and so cannot extend
-the prefix. Padding the instructions to clear the bar would buy the discount by adding
-the very tokens being discounted. Reusing the stored analysis, above, is what saves money
-in that stage instead.
+Ordering alone bought nothing, and the receipts said so for weeks before anyone looked.
+Across every receipt under `data/api-usage/`, a cached-token count above zero has only ever
+been ~100% — the signature of a byte-identical request being sent twice. A *partial* prefix
+hit, which is the entire point of the zones, had never been recorded once. Two attempts of
+one tailoring run, 29 seconds apart, sharing a Zone A of roughly 1,900 tokens, both billed
+every token at full price.
+
+The reason is that implicit caching places its breakpoint at the end of a *message*. All
+three zones lived in one user message, so the only boundary on offer was the end of the
+whole prompt, and only an identical repeat could ever reuse it. Zone A now travels as its own
+`developer` message carrying an explicit `prompt_cache_breakpoint`, with
+`prompt_cache_options.mode` set to `explicit` so the volatile zone below it is not written to
+the cache at all. `the_constant_zone_is_its_own_message_with_a_cache_breakpoint` is what keeps
+volatile text from drifting back into that message;
+`two_attempts_of_one_run_send_the_same_constant_prefix` checks the two attempts of a run still
+agree on it, using the real `resume/content/base.*.json` rather than a fixture.
+
+Setting `RESUME_WORKBENCH_PROMPT_DEBUG=1` adds `prompt_prefix_hash`, `prompt_prefix_chars`, and
+`request_body_hash` to each receipt. Two receipts that share a prefix hash but not a body hash
+are a genuine retry; two that share both are the same call issued twice. That distinction is
+not otherwise recoverable from a receipt, and it is the one the ledger could not answer.
+
+Analysis gets no discount from this and is not expected to. Its constant instruction block
+comes to roughly 650 tokens, under the 1024-token floor, so there is nothing for a breakpoint
+to mark. Padding it to clear the bar would buy the discount by adding the very tokens being
+discounted. Reusing the stored analysis, above, is what saves money in that stage instead.
+
+Trimming the job post before analysis does not help either, and this has been measured rather
+than assumed. Stripping English and French stop words out of a real posting removes about 10%
+of the analysis prompt, but analysis input is roughly 2,200 tokens against 1,500 output tokens
+billed at several times the rate, and the whole stage is about a quarter of a job's spend — so
+the saving lands near 0.4% of the bill. It also degrades the stage: `core_keywords[].evidence`
+quotes the post verbatim, `term_variants` exists because ATS matching is literal, and the
+importance weighting depends on the sentence and section structure a stop list destroys.
 
 `python scripts/api-usage-report.py` summarizes the receipts under `data/api-usage/` by
 stage, including cache hit rate; `--runs` groups by capture so the retries behind a single

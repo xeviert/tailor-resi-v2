@@ -14,10 +14,11 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Cache keys sent as `prompt_cache_key` on every request.
 ///
-/// Prefix caching is automatic, but without this key the provider routes requests across
-/// machines by hash and a low-volume app keeps missing the warm one. The receipts under
-/// `data/api-usage/` show exactly that: calls one second apart hit 99% cached, while genuine
-/// retries ten to thirty seconds apart - well inside the cache lifetime - hit zero.
+/// The key influences routing only: a low-volume app whose requests scatter across machines
+/// keeps missing the warm one, and grouping a stage's calls under one key is what keeps them
+/// landing together. It does not pin a machine and it does not by itself make anything
+/// cacheable - tailoring needed an explicit cache breakpoint for that, see
+/// `build_tailoring_request`.
 ///
 /// The key is per *stage*, deliberately not per capture or per job. Everything sharing a
 /// stage also shares that stage's constant prompt prefix, and routing them together is the
@@ -25,7 +26,7 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
 /// so stale entries are not fought over.
 pub const PROMPT_CACHE_KEY_JOB_ANALYSIS: &str = "resume-workbench:job_analysis:v1";
 pub const PROMPT_CACHE_KEY_JOB_IMPORT: &str = "resume-workbench:job_import:v1";
-pub const PROMPT_CACHE_KEY_RESUME_TAILORING: &str = "resume-workbench:resume_tailoring:v1";
+pub const PROMPT_CACHE_KEY_RESUME_TAILORING: &str = "resume-workbench:resume_tailoring:v2";
 
 pub fn shared_client() -> &'static reqwest::Client {
     SHARED_CLIENT.get_or_init(|| {

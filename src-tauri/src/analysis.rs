@@ -1,4 +1,4 @@
-use crate::api_usage::{record_response_usage, UsageContext};
+use crate::api_usage::{fingerprint_request, record_response_usage, UsageContext};
 use crate::http::{retry_delay, shared_client, status_is_retryable};
 use reqwest::StatusCode;
 use serde::{Deserialize, Serialize};
@@ -90,6 +90,13 @@ pub enum AnalysisError {
     #[error("OpenAI declined to analyze this job post: {0}")]
     Refused(String),
 }
+
+/// First byte of the volatile zone in the analysis prompt.
+///
+/// Analysis gets no prefix-cache discount - its instruction block is under the provider's
+/// floor - but the boundary is still where a duplicate call and a re-analysis can be told
+/// apart in the receipts, and the prompt-ordering test relies on it too.
+pub const ANALYSIS_PROMPT_VOLATILE_MARKER: &str = "\nNormalized job JSON:";
 
 pub fn build_analysis_prompt(parsed_job: &serde_json::Value) -> String {
     let compact_job = serde_json::to_string(&crate::server::prompt_job_view(parsed_job))
@@ -213,6 +220,13 @@ pub async fn analyze_job(
     parsed_job: &serde_json::Value,
 ) -> Result<JobAnalysis, AnalysisError> {
     let request_body = build_openai_request(&config.model, parsed_job);
+    // Two analysis calls with identical inputs appear in the receipts, each billed for a full
+    // output. The body hash is what says whether that is the same request twice or a genuine
+    // re-analysis of an edited capture.
+    let usage_context = UsageContext::default().with_prompt(fingerprint_request(
+        &request_body,
+        ANALYSIS_PROMPT_VOLATILE_MARKER,
+    ));
     let url = format!("{}/responses", config.base_url.trim_end_matches('/'));
     let mut last_error = None;
 
@@ -255,12 +269,7 @@ pub async fn analyze_job(
 
         // Before the parse: a refused or truncated response is billed too, and those are
         // exactly the calls a cost investigation needs to see.
-        record_response_usage(
-            "job_analysis",
-            &config.model,
-            &body,
-            UsageContext::default(),
-        );
+        record_response_usage("job_analysis", &config.model, &body, usage_context);
         let analysis = parse_job_analysis_from_response(&body)?;
         return Ok(analysis);
     }
@@ -370,9 +379,9 @@ mod tests {
     ///
     /// The ordering is right - instructions first, job post last - but the constant part is too
     /// small to qualify. The system message and this instruction block come to roughly 2,600
-    /// chars, about 650 tokens, and the provider caches nothing below 1024. The output schema is
-    /// constant and would close the gap, but it travels in `text.format.schema`, which serializes
-    /// *after* the messages, so it sits below the volatile job post and cannot extend the prefix.
+    /// chars, about 650 tokens, and the provider caches nothing below 1024. The constant output
+    /// schema does not close the gap: `text.format` has to match for a prefix to be reused, but
+    /// it is not prompt text and does not lengthen the prefix being matched.
     ///
     /// Padding the instructions to clear the bar would buy a 90% discount by adding the very
     /// tokens being discounted, which is a loss. The real saving for this stage is not calling it
@@ -382,7 +391,7 @@ mod tests {
     /// reachable and the comment above is stale.
     #[test]
     fn analysis_prompt_static_prefix_is_below_the_cache_floor() {
-        const MARKER: &str = "\nNormalized job JSON:";
+        const MARKER: &str = super::ANALYSIS_PROMPT_VOLATILE_MARKER;
         let prompt = build_analysis_prompt(&json!({"title": "Rust Engineer"}));
         let static_prefix = prompt.split(MARKER).next().unwrap();
 

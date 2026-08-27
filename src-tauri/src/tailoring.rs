@@ -1,6 +1,6 @@
 use crate::{
     analysis::{find_refusal, incomplete_reason, JobAnalysis},
-    api_usage::{record_response_usage, UsageContext},
+    api_usage::{fingerprint_request, record_response_usage, UsageContext},
     ats_score::{
         covered_and_omitted, load_locked_sections, score_ats_coverage, AtsCoverage, MissReason,
     },
@@ -472,6 +472,13 @@ fn render_evidence_block(entries: &[EvidenceEntry]) -> String {
     block
 }
 
+/// First byte of the volatile zone in the tailoring prompt.
+///
+/// Everything above it is Zone A, the text the provider is supposed to reuse across a run's
+/// attempts. The prompt builder, the prefix-stability test, and the request fingerprint all
+/// have to agree on where that boundary sits, so they share one definition of it.
+pub const TAILORING_PROMPT_VOLATILE_MARKER: &str = "\nOutput language: ";
+
 /// Builds the tailoring user message.
 ///
 /// Ordering here is about cost. The provider caches the longest constant prefix of a request
@@ -551,6 +558,61 @@ pub fn build_tailoring_prompt(
          {concise_instruction}\
          {correction_instruction}",
     )
+}
+
+/// The tailoring prompt split at its zone boundary.
+///
+/// `constant` is Zone A - the instruction text and the base resume - and is byte-identical for
+/// every call in a language. `variable` is everything below it. Concatenating them reproduces
+/// `build_tailoring_prompt` exactly, which is what lets the prefix-stability tests keep working
+/// against the single string while the request sends the two halves as separate messages.
+pub struct TailoringPromptZones {
+    pub constant: String,
+    pub variable: String,
+}
+
+/// Splits the tailoring prompt into the zone the provider can reuse and the zone it cannot.
+///
+/// Ordering the zones inside one message was not enough. Implicit caching places its breakpoint
+/// at the end of a message, so a prompt delivered as a single user message offers exactly one
+/// boundary - the end of the whole thing - and can only ever be reused by a byte-identical
+/// repeat. That is precisely what the receipts show: every cache hit ever recorded is ~100%,
+/// and a partial prefix hit has never occurred. The zones have to become separate messages
+/// before the constant one can be cached on its own.
+pub fn build_tailoring_prompt_zones(
+    language: &str,
+    parsed_job: &serde_json::Value,
+    analysis: &JobAnalysis,
+    base_resume: &serde_json::Value,
+    approved_evidence: &[EvidenceEntry],
+    priority_attested_terms: &[String],
+    concise: bool,
+    correction_instruction: Option<&str>,
+) -> TailoringPromptZones {
+    let prompt = build_tailoring_prompt(
+        language,
+        parsed_job,
+        analysis,
+        base_resume,
+        approved_evidence,
+        priority_attested_terms,
+        concise,
+        correction_instruction,
+    );
+    // Split rather than build twice, so the two halves cannot drift from the single string the
+    // prompt tests assert against.
+    match prompt.split_once(TAILORING_PROMPT_VOLATILE_MARKER) {
+        Some((constant, variable)) => TailoringPromptZones {
+            constant: constant.to_string(),
+            variable: format!("{TAILORING_PROMPT_VOLATILE_MARKER}{variable}"),
+        },
+        // No marker means the prompt lost its boundary. Sending everything as volatile costs a
+        // cache discount; guessing at a boundary would send the wrong text.
+        None => TailoringPromptZones {
+            constant: String::new(),
+            variable: prompt,
+        },
+    }
 }
 
 fn resume_content_schema() -> serde_json::Value {
@@ -657,17 +719,42 @@ pub fn build_tailoring_request(
     concise: bool,
     correction_instruction: Option<&str>,
 ) -> serde_json::Value {
+    let zones = build_tailoring_prompt_zones(
+        language,
+        parsed_job,
+        analysis,
+        base_resume,
+        approved_evidence,
+        priority_attested_terms,
+        concise,
+        correction_instruction,
+    );
+    // Explicit mode, not implicit: implicit caching would place its breakpoint at the end of the
+    // last message, which is the volatile zone, and write a cache entry no later attempt can
+    // reuse. Marking Zone A instead is what makes the retry loop cheap, and it also stops the
+    // per-attempt text from being written to the cache at all.
     serde_json::json!({
         "model": model,
         "prompt_cache_key": crate::http::PROMPT_CACHE_KEY_RESUME_TAILORING,
+        "prompt_cache_options": { "mode": "explicit" },
         "input": [
             {
                 "role": "system",
                 "content": "You rewrite resume JSON for ATS alignment. You must be truthful, evidence-bound, and preserve all locked layout constraints."
             },
             {
+                "role": "developer",
+                "content": [
+                    {
+                        "type": "input_text",
+                        "text": zones.constant,
+                        "prompt_cache_breakpoint": { "mode": "explicit" }
+                    }
+                ]
+            },
+            {
                 "role": "user",
-                "content": build_tailoring_prompt(language, parsed_job, analysis, base_resume, approved_evidence, priority_attested_terms, concise, correction_instruction)
+                "content": zones.variable
             }
         ],
         "text": {
@@ -714,6 +801,14 @@ pub async fn tailor_resume(
         concise,
         correction_instruction,
     );
+    // Fingerprint what actually goes out, not what the prompt builder is believed to produce.
+    // The receipts show prefix caching has never engaged on this stage, and the existing
+    // prefix test only ever sees a synthetic fixture, so the bytes on the wire are the one
+    // thing nothing currently checks.
+    let usage_context = usage_context.with_prompt(fingerprint_request(
+        &request_body,
+        TAILORING_PROMPT_VOLATILE_MARKER,
+    ));
     let url = format!("{}/responses", config.base_url.trim_end_matches('/'));
     let mut last_error = None;
 
@@ -2418,16 +2513,18 @@ fn relative_path(root: &Path, path: &Path) -> String {
 mod tests {
     use super::{
         build_tailoring_prompt, civil_date_from_days, company_role_slug, content_changes,
-        missing_model_placement_terms, normalize_bullet_rewrite_decisions,
+        load_base_resume, missing_model_placement_terms, normalize_bullet_rewrite_decisions,
+        build_tailoring_prompt_zones, build_tailoring_request,
         parse_tailored_resume_from_response, partial_tailoring_response, pdf_page_count,
         publish_verified_artifact, render_evidence_block, replacement_is_substantial,
         replacement_length_is_stable, replacement_reads_as_prose, sha256_file, slugify,
         unchanged_experience_bullets, unplaced_supported_terms, validate_bullet_rewrites,
         validate_full_bullet_rewrites, validate_tailored_content, write_variant_files,
-        BulletRewriteDecision, BulletRewriteOutcome, TailoredResume, TailoringReport,
-        MAX_COMPANY_ROLE_SLUG_LEN,
+        workspace_root, BulletRewriteDecision, BulletRewriteOutcome, TailoredResume,
+        TailoringReport, MAX_COMPANY_ROLE_SLUG_LEN, TAILORING_PROMPT_VOLATILE_MARKER,
     };
     use crate::analysis::{JobAnalysis, KeywordSignal};
+    use crate::api_usage::fingerprint_request_always;
     use crate::ats_score::{AtsCoverage, MissReason, TermCoverage};
     use crate::evidence::EvidenceEntry;
     use lopdf::{dictionary, Document, Object};
@@ -2868,7 +2965,7 @@ mod tests {
     /// on, with no failing test and nothing visible in the UI to notice.
     #[test]
     fn tailoring_prompt_keeps_a_stable_cacheable_prefix() {
-        const MARKER: &str = "\nOutput language: ";
+        const MARKER: &str = TAILORING_PROMPT_VOLATILE_MARKER;
 
         let evidence = vec![EvidenceEntry {
             term: "Kubernetes".to_string(),
@@ -2980,6 +3077,174 @@ mod tests {
             "constant prefix is only {} chars, too short to be cached",
             expected.len()
         );
+    }
+
+    /// The bug the receipts exposed, written down as a test.
+    ///
+    /// Zone ordering inside one message bought nothing: implicit caching breaks at the end of a
+    /// message, so a single-message prompt offers one boundary - the end of everything - and only
+    /// a byte-identical repeat can reuse it. Every cache hit in `data/api-usage/` is ~100% for
+    /// exactly that reason. What makes Zone A reusable is being its own message with an explicit
+    /// breakpoint on it, and nothing volatile sharing that message.
+    #[test]
+    fn the_constant_zone_is_its_own_message_with_a_cache_breakpoint() {
+        let root = workspace_root().expect("workspace root");
+        let base = load_base_resume(&root, "en").expect("base resume");
+        let request = build_tailoring_request(
+            "test-model",
+            "en",
+            &json!({"title": "Rust Engineer", "description": "Build services with Axum."}),
+            &analysis(),
+            &base,
+            &[],
+            &[],
+            false,
+            Some("Your preceding response was rejected: every bullet must change.
+
+"),
+        );
+
+        assert_eq!(request["prompt_cache_options"]["mode"], "explicit");
+
+        let block = &request["input"][1]["content"][0];
+        assert_eq!(block["prompt_cache_breakpoint"]["mode"], "explicit");
+        let constant = block["text"].as_str().expect("the cached block carries text");
+
+        assert!(constant.contains("Tailor the resume JSON below"));
+        assert!(constant.contains("Base resume JSON:"));
+        assert!(
+            constant.contains("Xevier") || constant.contains("experience"),
+            "the base resume must sit inside the cached block"
+        );
+
+        // Anything volatile in here is billed in full on every attempt.
+        for volatile in [
+            "Output language:",
+            "Normalized job JSON:",
+            "ATS analysis JSON:",
+            "Rust Engineer",
+            "Axum",
+            "Your preceding response was rejected",
+        ] {
+            assert!(
+                !constant.contains(volatile),
+                "{volatile:?} leaked into the cached block"
+            );
+        }
+
+        let volatile_message = request["input"][2]["content"]
+            .as_str()
+            .expect("the volatile zone stays one plain message");
+        assert!(volatile_message.starts_with(TAILORING_PROMPT_VOLATILE_MARKER));
+        assert!(volatile_message.contains("Your preceding response was rejected"));
+    }
+
+    /// The two zones must still reconstruct the prompt the rest of the tests assert against, or
+    /// splitting the message would quietly change what the model is asked to do.
+    #[test]
+    fn the_zones_concatenate_back_into_the_original_prompt() {
+        let root = workspace_root().expect("workspace root");
+        let base = load_base_resume(&root, "fr").expect("base resume");
+        let job = json!({"title": "Ingenieur Logiciel"});
+
+        let zones = build_tailoring_prompt_zones(
+            "fr", &job, &analysis(), &base, &[], &[], true, Some("correction text
+
+"),
+        );
+        let prompt = build_tailoring_prompt(
+            "fr", &job, &analysis(), &base, &[], &[], true, Some("correction text
+
+"),
+        );
+
+        assert_eq!(format!("{}{}", zones.constant, zones.variable), prompt);
+    }
+
+    /// Reproduces, offline, exactly what a two-attempt run puts on the wire.
+    ///
+    /// The retry loop loads the base resume once and passes it unchanged into every attempt, so
+    /// the only difference between attempt 1 and attempt 2 is the correction text at the very
+    /// bottom. If that is true of the serialized requests too, then the app is holding up its
+    /// end and a zero cached-token count on attempt 2 is the provider's answer, not a prompt
+    /// bug - which is the fork the whole investigation turns on, settled here without spending
+    /// a call to ask it.
+    #[test]
+    fn two_attempts_of_one_run_send_the_same_constant_prefix() {
+        let root = workspace_root().expect("workspace root");
+        let base = load_base_resume(&root, "fr").expect("base resume");
+        let job = json!({"title": "Ingenieur Logiciel", "description": "Construire des services."});
+
+        let request = |correction: Option<&str>| {
+            build_tailoring_request(
+                "test-model",
+                "fr",
+                &job,
+                &analysis(),
+                &base,
+                &[],
+                &[],
+                false,
+                correction,
+            )
+        };
+        let first = fingerprint_request_always(
+            &request(None),
+            TAILORING_PROMPT_VOLATILE_MARKER,
+        );
+        let second = fingerprint_request_always(
+            &request(Some("Your preceding response was rejected: every bullet must change.
+
+")),
+            TAILORING_PROMPT_VOLATILE_MARKER,
+        );
+
+        assert_eq!(
+            first.prefix_hash, second.prefix_hash,
+            "attempt 2 changed the constant prefix, so nothing below it can ever be cached"
+        );
+        assert_eq!(first.prefix_chars, second.prefix_chars);
+        assert_ne!(
+            first.body_hash, second.body_hash,
+            "the two attempts must not be byte-identical requests"
+        );
+    }
+
+    /// The guard above runs on a synthetic fixture, which is why it stayed green through a
+    /// period in which the receipts show prefix caching delivering nothing at all: a cached-token
+    /// count above zero has only ever meant a whole-request repeat, never a partial prefix hit.
+    /// The bytes that decide whether caching is even reachable are the ones built from the
+    /// resumes actually on disk, so those are what this checks - for both languages, since each
+    /// one is its own cached unit.
+    #[test]
+    fn the_real_base_resumes_clear_the_cache_floor() {
+        let root = workspace_root().expect("workspace root");
+
+        for language in ["en", "fr"] {
+            let base = load_base_resume(&root, language)
+                .unwrap_or_else(|error| panic!("base resume for {language}: {error}"));
+            let prompt = build_tailoring_prompt(
+                language,
+                &json!({"title": "Rust Engineer"}),
+                &analysis(),
+                &base,
+                &[],
+                &[],
+                false,
+                None,
+            );
+            let prefix = prompt
+                .split(TAILORING_PROMPT_VOLATILE_MARKER)
+                .next()
+                .expect("the prompt has a zone boundary");
+
+            // Roughly four characters per token against the provider's 1024-token floor.
+            assert!(
+                prefix.len() > 4 * 1024,
+                "{language} constant prefix is {} chars, under the cache floor - prefix caching                  cannot engage at all at that size",
+                prefix.len()
+            );
+        }
     }
 
     /// Across languages the base resume itself differs, so the shared prefix ends where the
