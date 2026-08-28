@@ -853,7 +853,7 @@ async fn analyze_handler(
     let root = workspace_root().ok();
 
     let (analysis_status, analysis, analysis_error) = match AnalysisConfig::from_env() {
-        Some(config) => match analyze_job(&config, &parsed).await {
+        Some(config) => match analyze_job(&config, &parsed, None).await {
             Ok(analysis) => {
                 let event_payload = serde_json::json!({
                     "parsed": parsed.clone(),

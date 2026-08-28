@@ -1,5 +1,6 @@
 use crate::api_usage::{fingerprint_request, record_response_usage, UsageContext};
 use crate::http::{retry_delay, shared_client, status_is_retryable};
+use crate::tailoring::PipelineProgress;
 use reqwest::StatusCode;
 use serde::{Deserialize, Serialize};
 
@@ -190,6 +191,15 @@ fn build_openai_request(model: &str, parsed_job: &serde_json::Value) -> serde_js
     serde_json::json!({
         "model": model,
         "prompt_cache_key": crate::http::PROMPT_CACHE_KEY_JOB_ANALYSIS,
+        // Nothing but the wall clock used to bound this call. A long job post could push the
+        // generation past the 300s client timeout, and a timeout here is not a failure the user
+        // ever sees - the retry loop below swallows it and pays for the same analysis twice.
+        // Output has peaked around 2,100 tokens, so 4,000 is roughly double the observed need;
+        // a response that still overruns is reported as `incomplete_details.reason`, not
+        // mis-parsed. Both fields are request parameters rather than prompt text, so the cached
+        // prefix is unaffected and PROMPT_CACHE_KEY_JOB_ANALYSIS does not need a version bump.
+        "max_output_tokens": 4000,
+        "reasoning": { "effort": "low" },
         "input": [
             {
                 "role": "system",
@@ -213,11 +223,12 @@ fn build_openai_request(model: &str, parsed_job: &serde_json::Value) -> serde_js
 
 /// Analysis is a single API call with no correction loop behind it, so a transient rate limit
 /// or a 503 would otherwise fail the whole run and force the user to re-analyze by hand.
-const MAX_ANALYSIS_ATTEMPTS: u32 = 3;
+pub const MAX_ANALYSIS_ATTEMPTS: u32 = 3;
 
 pub async fn analyze_job(
     config: &AnalysisConfig,
     parsed_job: &serde_json::Value,
+    reporter: Option<&(dyn Fn(PipelineProgress) + Send + Sync)>,
 ) -> Result<JobAnalysis, AnalysisError> {
     let request_body = build_openai_request(&config.model, parsed_job);
     // Two analysis calls with identical inputs appear in the receipts, each billed for a full
@@ -229,6 +240,29 @@ pub async fn analyze_job(
     ));
     let url = format!("{}/responses", config.base_url.trim_end_matches('/'));
     let mut last_error = None;
+
+    // A swallowed attempt is what made a slow analysis look like a frozen app: the loop below
+    // used to `continue` on a transport error - the 300s timeout included - without a log line
+    // or a progress event, so the user saw one silent stage for the length of two calls. The
+    // final attempt stays quiet here because the caller reports that one as `failed`.
+    let report_retry = |attempt: u32, error: &AnalysisError| {
+        eprintln!(
+            "[analysis] attempt {} of {MAX_ANALYSIS_ATTEMPTS} failed: {error}",
+            attempt + 1
+        );
+        if attempt + 1 >= MAX_ANALYSIS_ATTEMPTS {
+            return;
+        }
+        if let Some(reporter) = reporter {
+            reporter(PipelineProgress {
+                stage: "ats_analysis",
+                status: "retrying",
+                message: format!("Analysis attempt {} failed, retrying: {error}", attempt + 1),
+                attempt: Some((attempt + 1) as usize),
+                total_attempts: Some(MAX_ANALYSIS_ATTEMPTS as usize),
+            });
+        }
+    };
 
     for attempt in 0..MAX_ANALYSIS_ATTEMPTS {
         if attempt > 0 {
@@ -244,7 +278,9 @@ pub async fn analyze_job(
         {
             Ok(response) => response,
             Err(error) => {
-                last_error = Some(AnalysisError::Request(error.to_string()));
+                let error = AnalysisError::Request(error.to_string());
+                report_retry(attempt, &error);
+                last_error = Some(error);
                 continue;
             }
         };
@@ -253,7 +289,9 @@ pub async fn analyze_job(
         let body = match response.text().await {
             Ok(body) => body,
             Err(error) => {
-                last_error = Some(AnalysisError::Request(error.to_string()));
+                let error = AnalysisError::Request(error.to_string());
+                report_retry(attempt, &error);
+                last_error = Some(error);
                 continue;
             }
         };
@@ -261,6 +299,7 @@ pub async fn analyze_job(
         if !status.is_success() {
             let error = AnalysisError::Http { status, body };
             if status_is_retryable(status) {
+                report_retry(attempt, &error);
                 last_error = Some(error);
                 continue;
             }
@@ -416,6 +455,68 @@ mod tests {
             job_start > instructions_end,
             "job content appeared above the instruction block"
         );
+    }
+
+    /// A retry has to be audible.
+    ///
+    /// This is the regression that made a slow analysis look like a hang: every `continue` in
+    /// the loop discarded its error silently, so a run that spent 300s timing out and then
+    /// succeeded on the retry was indistinguishable, from the UI, from one that took 300s to
+    /// answer. The last attempt stays quiet on purpose - the caller reports that one as
+    /// `failed`, and a "retrying" event for a retry that never happens is a lie.
+    #[tokio::test]
+    async fn a_failed_attempt_reports_before_it_retries() {
+        // Bind and drop, so the port is one the OS just confirmed free: a loopback connection
+        // to it is refused immediately rather than waiting out the connect timeout.
+        let port = {
+            let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            listener.local_addr().unwrap().port()
+        };
+        let config = super::AnalysisConfig {
+            api_key: "test-key".to_string(),
+            model: "gpt-5.6-luna".to_string(),
+            base_url: format!("http://127.0.0.1:{port}"),
+        };
+        let events: std::sync::Mutex<Vec<super::PipelineProgress>> =
+            std::sync::Mutex::new(Vec::new());
+        let reporter = |event: super::PipelineProgress| events.lock().unwrap().push(event);
+
+        let result = super::analyze_job(&config, &json!({"title": "Rust"}), Some(&reporter)).await;
+
+        assert!(
+            result.is_err(),
+            "an unreachable host must not report success"
+        );
+        let events = events.into_inner().unwrap();
+        assert_eq!(
+            events.len(),
+            (super::MAX_ANALYSIS_ATTEMPTS - 1) as usize,
+            "every attempt but the last should announce its retry: {events:?}"
+        );
+        for (index, event) in events.iter().enumerate() {
+            assert_eq!(event.stage, "ats_analysis");
+            assert_eq!(event.status, "retrying");
+            assert_eq!(event.attempt, Some(index + 1));
+            assert_eq!(
+                event.total_attempts,
+                Some(super::MAX_ANALYSIS_ATTEMPTS as usize)
+            );
+        }
+    }
+
+    /// The generation has to stay bounded.
+    ///
+    /// Without a ceiling a long job post can run past the 300s client timeout, and that
+    /// timeout is invisible: the retry loop discards the billed call and starts over, so the
+    /// user waits for two full calls and sees one silent progress stage. The cap is the thing
+    /// that keeps the request inside the transport budget in the first place.
+    #[test]
+    fn analysis_request_bounds_the_generation() {
+        let request =
+            super::build_openai_request("gpt-5.6-luna", &json!({"title": "Rust Engineer"}));
+
+        assert_eq!(request["max_output_tokens"], json!(4000));
+        assert_eq!(request["reasoning"]["effort"], json!("low"));
     }
 
     #[test]

@@ -326,7 +326,7 @@ pub async fn run_resume_pipeline(
             return Err(AppError::Message(message));
         }
     };
-    let analysis = match analyze_job(&config, &captured.parsed).await {
+    let analysis = match analyze_job(&config, &captured.parsed, Some(&reporter)).await {
         Ok(analysis) => analysis,
         Err(error) => {
             let message = error.to_string();
@@ -554,7 +554,7 @@ pub async fn analyze_latest_job(
                 return Err(AppError::Message(message));
             }
         };
-        match analyze_job(&config, &captured.parsed).await {
+        match analyze_job(&config, &captured.parsed, Some(&reporter)).await {
             Ok(analysis) => analysis,
             Err(error) => {
                 let message = error.to_string();

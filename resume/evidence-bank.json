@@ -53,7 +53,7 @@
       "term": "Fluent written and spoken English",
       "kind": "technology",
       "user_attested": true,
-      "allow_model_role_placement": false
+      "allow_model_role_placement": true
     },
     {
       "term": "Independent delivery of complex components in partnership with a Staff Engineer",
@@ -557,7 +557,7 @@
       "term": "JavaScript/TypeScript",
       "kind": "technology",
       "user_attested": true,
-      "allow_model_role_placement": false
+      "allow_model_role_placement": true
     },
     {
       "term": "Modern frontend experience with React",
@@ -593,7 +593,7 @@
       "term": "automated testing",
       "kind": "method_domain",
       "user_attested": true,
-      "allow_model_role_placement": false
+      "allow_model_role_placement": true
     },
     {
       "term": "scalable application",
@@ -819,9 +819,9 @@
     },
     {
       "term": "Observability",
-      "kind": "technology",
+      "kind": "responsibility",
       "user_attested": true,
-      "allow_model_role_placement": false
+      "allow_model_role_placement": true
     },
     {
       "term": "Product features",
@@ -869,7 +869,7 @@
       "term": "Modular architecture",
       "kind": "method_domain",
       "user_attested": true,
-      "allow_model_role_placement": false
+      "allow_model_role_placement": true
     },
     {
       "term": "Production quality ownership",
@@ -1101,9 +1101,9 @@
     },
     {
       "term": "Data pipelines",
-      "kind": "method_domain",
+      "kind": "technology",
       "user_attested": true,
-      "allow_model_role_placement": false
+      "allow_model_role_placement": true
     },
     {
       "term": "Order and commission pipelines",
@@ -1902,7 +1902,7 @@
       "term": "Agile software development",
       "kind": "method_domain",
       "user_attested": true,
-      "allow_model_role_placement": false
+      "allow_model_role_placement": true
     },
     {
       "term": "Continuous delivery",
@@ -2610,7 +2610,7 @@
       "term": "State management",
       "kind": "technology",
       "user_attested": true,
-      "allow_model_role_placement": false
+      "allow_model_role_placement": true
     },
     {
       "term": "Unit testing",
@@ -3172,6 +3172,192 @@
     },
     {
       "term": "Hooks et Context API",
+      "kind": "technology",
+      "user_attested": true,
+      "allow_model_role_placement": true
+    },
+    {
+      "term": "API design and maintenance",
+      "kind": "responsibility",
+      "user_attested": true,
+      "allow_model_role_placement": true
+    },
+    {
+      "term": "Data modeling",
+      "kind": "method_domain",
+      "user_attested": true,
+      "allow_model_role_placement": true
+    },
+    {
+      "term": "Full-stack feature development",
+      "kind": "responsibility",
+      "user_attested": true,
+      "allow_model_role_placement": true
+    },
+    {
+      "term": "Prisma",
+      "kind": "technology",
+      "user_attested": true,
+      "allow_model_role_placement": true
+    },
+    {
+      "term": "Production-grade application development",
+      "kind": "technology",
+      "user_attested": true,
+      "allow_model_role_placement": true
+    },
+    {
+      "term": "Relational databases",
+      "kind": "method_domain",
+      "user_attested": true,
+      "allow_model_role_placement": true
+    },
+    {
+      "term": "LLM tooling",
+      "kind": "technology",
+      "user_attested": true,
+      "allow_model_role_placement": true
+    },
+    {
+      "term": "n8n",
+      "kind": "technology",
+      "user_attested": true,
+      "allow_model_role_placement": true
+    },
+    {
+      "term": "AI strengths and limitations awareness",
+      "kind": "technology",
+      "user_attested": true,
+      "allow_model_role_placement": true
+    },
+    {
+      "term": "Code quality and observability",
+      "kind": "responsibility",
+      "user_attested": true,
+      "allow_model_role_placement": true
+    },
+    {
+      "term": "Customer satisfaction focus",
+      "kind": "technology",
+      "user_attested": true,
+      "allow_model_role_placement": true
+    },
+    {
+      "term": "Experience in software architecture or advanced development",
+      "kind": "technology",
+      "user_attested": true,
+      "allow_model_role_placement": true
+    },
+    {
+      "term": "Experience with agile teams",
+      "kind": "method_domain",
+      "user_attested": true,
+      "allow_model_role_placement": true
+    },
+    {
+      "term": "International work context",
+      "kind": "technology",
+      "user_attested": true,
+      "allow_model_role_placement": true
+    },
+    {
+      "term": "Technical decision-making",
+      "kind": "responsibility",
+      "user_attested": true,
+      "allow_model_role_placement": true
+    },
+    {
+      "term": "Technical implementation communication",
+      "kind": "responsibility",
+      "user_attested": true,
+      "allow_model_role_placement": true
+    },
+    {
+      "term": "Engineering Manager / Product Manager / Product Designer squad model",
+      "kind": "technology",
+      "user_attested": true,
+      "allow_model_role_placement": true
+    },
+    {
+      "term": "4-6+ years of full-stack JavaScript/TypeScript experience",
+      "kind": "technology",
+      "user_attested": true,
+      "allow_model_role_placement": true
+    },
+    {
+      "term": "AI coding agents",
+      "kind": "technology",
+      "user_attested": true,
+      "allow_model_role_placement": true
+    },
+    {
+      "term": "Autonomous feature delivery",
+      "kind": "technology",
+      "user_attested": true,
+      "allow_model_role_placement": true
+    },
+    {
+      "term": "Claude Code / Copilot / Cursor",
+      "kind": "technology",
+      "user_attested": true,
+      "allow_model_role_placement": true
+    },
+    {
+      "term": "Code quality",
+      "kind": "method_domain",
+      "user_attested": true,
+      "allow_model_role_placement": true
+    },
+    {
+      "term": "Dockerfiles",
+      "kind": "technology",
+      "user_attested": true,
+      "allow_model_role_placement": true
+    },
+    {
+      "term": "Product awareness",
+      "kind": "technology",
+      "user_attested": true,
+      "allow_model_role_placement": true
+    },
+    {
+      "term": "Routing",
+      "kind": "technology",
+      "user_attested": true,
+      "allow_model_role_placement": true
+    },
+    {
+      "term": "Team-level AI agent configuration",
+      "kind": "technology",
+      "user_attested": true,
+      "allow_model_role_placement": true
+    },
+    {
+      "term": "Test-by-design development",
+      "kind": "method_domain",
+      "user_attested": true,
+      "allow_model_role_placement": true
+    },
+    {
+      "term": "UI testing",
+      "kind": "technology",
+      "user_attested": true,
+      "allow_model_role_placement": true
+    },
+    {
+      "term": "docker-compose",
+      "kind": "technology",
+      "user_attested": true,
+      "allow_model_role_placement": true
+    },
+    {
+      "term": "docker-compose usage,",
+      "kind": "technology",
+      "user_attested": true,
+      "allow_model_role_placement": true
+    },
+    {
+      "term": "Copilot",
       "kind": "technology",
       "user_attested": true,
       "allow_model_role_placement": true
