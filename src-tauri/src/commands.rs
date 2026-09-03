@@ -26,9 +26,68 @@ use std::{
 };
 use tauri::{AppHandle, Emitter};
 
+#[derive(Serialize)]
+pub struct SetupStatus {
+    api_key_configured: bool,
+    api_key_source: &'static str,
+    libreoffice_installed: bool,
+    extension_available: bool,
+}
+
+#[tauri::command]
+pub fn get_setup_status() -> Result<SetupStatus, AppError> {
+    let environment_key = std::env::var("OPENAI_API_KEY")
+        .ok()
+        .is_some_and(|value| !value.trim().is_empty());
+    let stored_key = crate::config::stored_openai_api_key().is_some();
+    Ok(SetupStatus {
+        api_key_configured: environment_key || stored_key,
+        api_key_source: if environment_key {
+            "environment"
+        } else if stored_key {
+            "credential_manager"
+        } else {
+            "none"
+        },
+        libreoffice_installed: crate::config::libreoffice_path().is_some(),
+        extension_available: crate::config::extension_directory().is_some_and(|path| path.is_dir()),
+    })
+}
+
+#[tauri::command]
+pub fn save_openai_api_key(api_key: String) -> Result<SetupStatus, AppError> {
+    crate::config::save_openai_api_key(&api_key).map_err(AppError::Message)?;
+    get_setup_status()
+}
+
+#[tauri::command]
+pub fn delete_openai_api_key() -> Result<SetupStatus, AppError> {
+    crate::config::delete_openai_api_key().map_err(AppError::Message)?;
+    get_setup_status()
+}
+
+#[tauri::command]
+pub fn open_extension_directory() -> Result<(), AppError> {
+    let path = crate::config::extension_directory()
+        .filter(|path| path.is_dir())
+        .ok_or_else(|| AppError::Message("The bundled extension directory is unavailable.".to_string()))?;
+    launch_path(&path, false)
+}
+
 #[tauri::command]
 pub fn ping() -> Result<String, AppError> {
     Ok("pong".to_string())
+}
+
+fn require_document_runtime() -> Result<(), AppError> {
+    if crate::config::libreoffice_path().is_some() {
+        Ok(())
+    } else {
+        Err(AppError::Message(
+            "LibreOffice is required before AI analysis so ResiTailor can render and verify the final one-page PDF. Install LibreOffice, then restart the app."
+                .to_string(),
+        ))
+    }
 }
 
 #[tauri::command(async)]
@@ -280,6 +339,7 @@ pub async fn run_resume_pipeline(
     app: AppHandle,
     language: String,
 ) -> Result<PipelineResult, AppError> {
+    require_document_runtime()?;
     let reporter = |event: PipelineProgress| {
         if let Err(error) = app.emit("resume-pipeline-progress", event) {
             eprintln!("[pipeline] Failed to emit progress event: {error}");
@@ -488,6 +548,7 @@ pub async fn analyze_latest_job(
     language: String,
     force: bool,
 ) -> Result<PreflightResult, AppError> {
+    require_document_runtime()?;
     // Analysis used to run silently: the review screen only mounts its progress panel once
     // an event has arrived, so a call that can legitimately take minutes showed nothing but
     // a button reading "Working...". Reporting the same two stages the failure summaries
@@ -700,6 +761,7 @@ pub async fn generate_tailored_resume(
     app: AppHandle,
     request: GenerateTailoredResumeRequest,
 ) -> Result<TailorResponse, AppError> {
+    require_document_runtime()?;
     let captured = load_latest_capture()
         .map_err(AppError::Message)?
         .ok_or_else(|| {
@@ -805,6 +867,7 @@ pub async fn retailor_resume_with_evidence(
     app: AppHandle,
     request: RetailorResumeRequest,
 ) -> Result<TailorResponse, AppError> {
+    require_document_runtime()?;
     if !matches!(request.language.as_str(), "en" | "fr") {
         return Err(AppError::Message("Language must be en or fr.".to_string()));
     }

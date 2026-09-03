@@ -127,6 +127,49 @@ async function emit(event: string, payload: unknown) {
   });
 }
 
+describe('packaged app setup', () => {
+  it('stores the API key through Rust and blocks AI until LibreOffice is ready', async () => {
+    const fallback = mocks.invoke.getMockImplementation();
+    mocks.invoke.mockImplementation((command: string, args?: unknown) => {
+      if (command === 'get_setup_status') {
+        return Promise.resolve({
+          api_key_configured: false,
+          api_key_source: 'none',
+          libreoffice_installed: false,
+          extension_available: true,
+        });
+      }
+      if (command === 'save_openai_api_key') {
+        return Promise.resolve({
+          api_key_configured: true,
+          api_key_source: 'credential_manager',
+          libreoffice_installed: false,
+          extension_available: true,
+        });
+      }
+      return fallback?.(command, args);
+    });
+
+    render(<App />);
+
+    expect(await screen.findByText('App setup needs attention')).toBeVisible();
+    expect(screen.getByRole('button', { name: 'Analyze job' })).toBeDisabled();
+
+    fireEvent.change(screen.getByLabelText('OpenAI API key'), {
+      target: { value: 'sk-test-personal' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Save key' }));
+
+    await waitFor(() =>
+      expect(mocks.invoke).toHaveBeenCalledWith('save_openai_api_key', {
+        apiKey: 'sk-test-personal',
+      }),
+    );
+    expect(screen.getByRole('button', { name: 'Analyze job' })).toBeDisabled();
+    expect(screen.getByText(/Not detected/)).toBeVisible();
+  });
+});
+
 describe('review-to-tailoring workflow', () => {
   it('shows output language before analysis and opens an immediate focused pipeline', async () => {
     render(<App />);

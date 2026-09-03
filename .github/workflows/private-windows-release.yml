@@ -1,0 +1,74 @@
+name: Private Windows release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Release tag, for example v0.1.0
+        required: true
+        default: v0.1.0
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    runs-on: windows-latest
+    steps:
+      - name: Refuse to publish personal resume assets from a public repository
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $visibility = gh api "repos/$env:GITHUB_REPOSITORY" --jq .visibility
+          if ($visibility -ne 'private') {
+            throw "This workflow only publishes from a private repository. Current visibility: $visibility"
+          }
+
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Use current stable Rust
+        shell: pwsh
+        run: |
+          rustup update stable
+          rustup default stable
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Verify frontend
+        run: npm test
+
+      - name: Verify Rust backend
+        working-directory: src-tauri
+        run: cargo test
+
+      - name: Build NSIS installer
+        run: npm run build:desktop
+
+      - name: Prepare checksummed release files
+        id: artifacts
+        shell: pwsh
+        run: |
+          $installer = Get-ChildItem 'src-tauri/target/release/bundle/nsis' -Filter '*-setup.exe' | Select-Object -First 1
+          if ($null -eq $installer) { throw 'Tauri did not produce an NSIS installer.' }
+          $checksumPath = "$($installer.FullName).sha256"
+          $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $installer.FullName).Hash.ToLowerInvariant()
+          "$hash  $($installer.Name)" | Set-Content -Encoding ascii -LiteralPath $checksumPath
+          "installer=$($installer.FullName)" >> $env:GITHUB_OUTPUT
+          "checksum=$checksumPath" >> $env:GITHUB_OUTPUT
+
+      - name: Publish private GitHub release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.version }}
+          INSTALLER: ${{ steps.artifacts.outputs.installer }}
+          CHECKSUM: ${{ steps.artifacts.outputs.checksum }}
+        run: |
+          gh release create $env:RELEASE_TAG $env:INSTALLER $env:CHECKSUM --title "ResiTailor $env:RELEASE_TAG" --notes "Private unsigned Windows build. Windows may show an Unknown Publisher warning. Install LibreOffice separately before running AI analysis."

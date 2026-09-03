@@ -25,6 +25,7 @@ lopdf = "0.36"
 # job post served as ISO-8859-1 loses every accent, which then poisons language detection
 # and the analysis prompt. `encoding_rs` is already in the lockfile, so it costs nothing.
 reqwest = { version = "0.12", default-features = false, features = ["charset", "json", "rustls-tls"] }
+keyring = { version = "3", features = ["windows-native"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.10"

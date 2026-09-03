@@ -68,11 +68,7 @@ pub struct TailoringConfig {
 
 impl TailoringConfig {
     pub fn from_env() -> Option<Self> {
-        let api_key = std::env::var("OPENAI_API_KEY").ok()?;
-        let api_key = api_key.trim().to_string();
-        if api_key.is_empty() {
-            return None;
-        }
+        let api_key = crate::config::resolved_openai_api_key()?;
 
         Some(Self {
             api_key,
@@ -1360,6 +1356,9 @@ fn invalid_message(message: &str) -> TailoringError {
 }
 
 pub fn workspace_root() -> Result<PathBuf, TailoringError> {
+    if let Some(root) = crate::config::workspace_root() {
+        return Ok(root);
+    }
     let current = std::env::current_dir().map_err(|error| TailoringError::Io(error.to_string()))?;
     for candidate in current.ancestors() {
         if candidate.join("resume").join("content").is_dir() {
@@ -1939,6 +1938,12 @@ pub async fn tailor_and_render_with_progress(
     request: TailorRequest,
     reporter: Option<&(dyn Fn(PipelineProgress) + Send + Sync)>,
 ) -> Result<TailorResponse, TailoringError> {
+    if crate::config::libreoffice_path().is_none() {
+        return Err(TailoringError::Render(
+            "LibreOffice is required for PDF export and one-page validation. Install LibreOffice, then restart ResiTailor."
+                .to_string(),
+        ));
+    }
     let language = request.language.as_str();
     let root = workspace_root().map_err(|error| {
         progress(

@@ -13,11 +13,7 @@ pub struct AnalysisConfig {
 
 impl AnalysisConfig {
     pub fn from_env() -> Option<Self> {
-        let api_key = std::env::var("OPENAI_API_KEY").ok()?;
-        let api_key = api_key.trim().to_string();
-        if api_key.is_empty() {
-            return None;
-        }
+        let api_key = crate::config::resolved_openai_api_key()?;
 
         Some(Self {
             api_key,

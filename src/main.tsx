@@ -200,7 +200,12 @@ type PipelineProgress = {
 };
 type WorkflowPhase = 'job' | 'tailoring';
 type Screen = 'empty' | 'review' | 'pipeline' | 'completion';
-const BRIDGE_HEALTH_URL = 'http://127.0.0.1:3000/health';
+type SetupStatus = {
+  api_key_configured: boolean;
+  api_key_source: 'environment' | 'credential_manager' | 'none';
+  libreoffice_installed: boolean;
+  extension_available: boolean;
+};
 const PIPELINE_STAGES = [
   ['ats_analysis', 'ATS analysis'],
   ['resume_tailoring', 'Resume tailoring'],
@@ -1673,6 +1678,9 @@ export function App() {
   // whenever nothing is running.
   const [runStartedAt, setRunStartedAt] = useState<number | null>(null);
   const [confirmingStartOver, setConfirmingStartOver] = useState(false);
+  const [setupStatus, setSetupStatus] = useState<SetupStatus | null>(null);
+  const [apiKeyDraft, setApiKeyDraft] = useState('');
+  const [savingApiKey, setSavingApiKey] = useState(false);
   const summaryRef = useRef<HTMLDivElement | null>(null);
   const pipelineRef = useRef<HTMLDivElement | null>(null);
   const captureRef = useRef<CapturedJob | null>(null);
@@ -1695,6 +1703,32 @@ export function App() {
     invoke<EvidenceBank>('get_evidence_bank')
       .then(setBank)
       .catch((reason) => setError(errorText(reason)));
+  const setupBlocked =
+    setupStatus !== null &&
+    (!setupStatus.api_key_configured || !setupStatus.libreoffice_installed);
+  async function saveApiKey() {
+    setSavingApiKey(true);
+    setError('');
+    try {
+      const next = await invoke<SetupStatus>('save_openai_api_key', {
+        apiKey: apiKeyDraft,
+      });
+      setSetupStatus(next);
+      setApiKeyDraft('');
+    } catch (reason) {
+      setError(`Could not save the API key: ${errorText(reason)}`);
+    } finally {
+      setSavingApiKey(false);
+    }
+  }
+  async function forgetApiKey() {
+    try {
+      setSetupStatus(await invoke<SetupStatus>('delete_openai_api_key'));
+      setApiKeyDraft('');
+    } catch (reason) {
+      setError(`Could not remove the saved API key: ${errorText(reason)}`);
+    }
+  }
   function applyPreflight(next: PreflightResult) {
     preflightRef.current = next;
     setPreflight(next);
@@ -1989,22 +2023,17 @@ export function App() {
     return 'review';
   }, [job, workflowPhase, running, result, reviewingJob]);
   useEffect(() => {
-    void fetch(BRIDGE_HEALTH_URL)
-      .then(async (response) => {
-        const health = (await response.json()) as {
-          bridge?: string;
-          result_protocol_version?: number;
-        };
-        if (!response.ok || health.bridge !== 'tauri-rust')
+    void invoke<string>('ping')
+      .then((response) => {
+        if (response !== undefined && response !== 'pong')
           throw new Error(
-            'The Rust capture bridge is unavailable. Stop any legacy capture server on port 3000, then restart the desktop app.',
-          );
-        if (health.result_protocol_version !== 2)
-          throw new Error(
-            'The desktop UI and Rust backend are out of date with each other. Fully stop and restart ResiTailor before running another analysis.',
+            'The desktop UI and Rust backend are out of date with each other. Fully stop and restart ResiTailor.',
           );
       })
       .catch((reason) => setError(errorText(reason)));
+    void invoke<SetupStatus>('get_setup_status')
+      .then((status) => status && setSetupStatus(status))
+      .catch((reason) => setError(`Setup check failed: ${errorText(reason)}`));
     void invoke<CapturedJob | null>('get_latest_job')
       .then((latest) => {
         captureRef.current = latest;
@@ -2475,6 +2504,84 @@ export function App() {
           {capture ? 'Job captured' : 'Waiting for capture'}
         </span>
       </header>
+      {setupStatus && (
+        <details
+          className={`${compactPanelClass} mt-4`}
+          open={!setupStatus.api_key_configured || !setupStatus.libreoffice_installed}
+        >
+          <summary className='cursor-pointer font-bold text-[#176a46]'>
+            App setup{' '}
+            {setupStatus.api_key_configured && setupStatus.libreoffice_installed
+              ? 'ready'
+              : 'needs attention'}
+          </summary>
+          <div className='mt-4 grid gap-4'>
+            <div>
+              <p className='m-0 font-bold'>OpenAI API key</p>
+              <p className='mt-1 mb-2 text-[13px] text-[#627067]'>
+                {setupStatus.api_key_configured
+                  ? `Configured via ${setupStatus.api_key_source === 'credential_manager' ? 'Windows Credential Manager' : 'the environment'}.`
+                  : 'Enter it once. The packaged app stores it in Windows Credential Manager.'}
+              </p>
+              <div className='flex flex-wrap gap-2'>
+                <input
+                  aria-label='OpenAI API key'
+                  autoComplete='off'
+                  className='min-w-[300px] flex-1 rounded-lg border border-[#b9c8bf] bg-white px-3 py-2'
+                  onChange={(event) => setApiKeyDraft(event.target.value)}
+                  placeholder='sk-proj-...'
+                  type='password'
+                  value={apiKeyDraft}
+                />
+                <button
+                  className={primaryButtonClass}
+                  disabled={savingApiKey || !apiKeyDraft.trim()}
+                  onClick={() => void saveApiKey()}
+                  type='button'
+                >
+                  {savingApiKey ? 'Saving...' : 'Save key'}
+                </button>
+                {setupStatus.api_key_source === 'credential_manager' && (
+                  <button
+                    className={secondaryButtonClass}
+                    onClick={() => void forgetApiKey()}
+                    type='button'
+                  >
+                    Forget saved key
+                  </button>
+                )}
+              </div>
+            </div>
+            <div>
+              <p className='m-0 font-bold'>LibreOffice</p>
+              <p className='mt-1 mb-0 text-[13px] text-[#627067]'>
+                {setupStatus.libreoffice_installed
+                  ? 'Detected and ready for PDF export and one-page validation.'
+                  : 'Not detected. Install LibreOffice, then restart ResiTailor before using AI actions.'}
+              </p>
+            </div>
+            <div>
+              <p className='m-0 font-bold'>Browser extension</p>
+              <p className='mt-1 mb-2 text-[13px] text-[#627067]'>
+                In Chrome or Edge, enable Developer Mode, choose Load unpacked,
+                and select the folder opened below. URL and pasted-text import work without it.
+              </p>
+              <button
+                className={secondaryButtonClass}
+                disabled={!setupStatus.extension_available}
+                onClick={() =>
+                  void invoke('open_extension_directory').catch((reason) =>
+                    setError(errorText(reason)),
+                  )
+                }
+                type='button'
+              >
+                Open extension folder
+              </button>
+            </div>
+          </div>
+        </details>
+      )}
       {error && (
         <p
           className='mt-4 mb-0 rounded-lg bg-[#fff3eb] px-3 py-2.5 text-[#9e411e]'
@@ -2674,7 +2781,7 @@ export function App() {
               )}
               <button
                 className={`${primaryButtonClass} max-[680px]:w-full self-center`}
-                disabled={running || languageChanging}
+                disabled={running || languageChanging || setupBlocked}
                 onClick={preflight ? generate : () => void analyze()}
               >
                 {languageChanging
@@ -2693,7 +2800,7 @@ export function App() {
                 <button
                   className={`${secondaryButtonClass} max-[680px]:w-full self-center`}
                   data-testid='re-analyze'
-                  disabled={running || languageChanging}
+                  disabled={running || languageChanging || setupBlocked}
                   onClick={() => void analyze(true)}
                   title='Analyze this job post again instead of reusing the stored analysis.'
                   type='button'

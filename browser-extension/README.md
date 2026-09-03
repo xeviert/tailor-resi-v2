@@ -11,6 +11,10 @@ A browser extension that extracts job posting data (title, company, description)
 
 ## Installation
 
+Packaged ResiTailor builds include this directory. In the desktop app, expand **App setup**
+and choose **Open extension folder**; use that persistent installed folder below. The manifest
+public key keeps the unpacked extension ID stable across machines and upgrades.
+
 1. Open Chrome and navigate to `chrome://extensions/`
 2. Enable **Developer mode** (toggle in top right)
 3. Click **Load unpacked**

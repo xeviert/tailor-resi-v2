@@ -1137,10 +1137,17 @@ pub async fn start_server(app_handle: AppHandle) {
     let cors = CorsLayer::new()
         .allow_origin(AllowOrigin::predicate(|origin, _| {
             let s = origin.as_bytes();
-            s.starts_with(b"chrome-extension://")
-                || s.starts_with(b"http://localhost")
-                || s.starts_with(b"http://127.0.0.1")
-                || s.starts_with(b"tauri://")
+            if s == b"chrome-extension://mkcddglmdekdobheehhnmjdfbpffciaj" {
+                return true;
+            }
+            #[cfg(debug_assertions)]
+            {
+                return s.starts_with(b"http://localhost")
+                    || s.starts_with(b"http://127.0.0.1")
+                    || s.starts_with(b"tauri://");
+            }
+            #[cfg(not(debug_assertions))]
+            false
         }))
         .allow_methods([Method::GET, Method::POST, Method::OPTIONS])
         .allow_headers([axum::http::header::CONTENT_TYPE]);

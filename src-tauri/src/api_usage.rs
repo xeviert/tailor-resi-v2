@@ -197,6 +197,9 @@ fn token_usage(response: &serde_json::Value) -> Option<ApiTokenUsage> {
 }
 
 fn workspace_root() -> Option<PathBuf> {
+    if let Some(root) = crate::config::workspace_root() {
+        return Some(root);
+    }
     let current = std::env::current_dir().ok()?;
     current
         .ancestors()

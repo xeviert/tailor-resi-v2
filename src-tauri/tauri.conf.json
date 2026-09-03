@@ -22,7 +22,24 @@
     }
   },
   "bundle": {
-    "active": false,
-    "targets": "all"
+    "active": true,
+    "targets": ["nsis"],
+    "icon": ["icons/icon.ico"],
+    "resources": {
+      "../resume/content/**/*": "resume/content/",
+      "../resume/templates/**/*": "resume/templates/",
+      "../resume/scripts/**/*": "resume/scripts/",
+      "../resume/evidence-bank.json": "resume/evidence-bank.json",
+      "../browser-extension/manifest.json": "browser-extension/manifest.json",
+      "../browser-extension/background/**/*": "browser-extension/background/",
+      "../browser-extension/content-scripts/**/*": "browser-extension/content-scripts/",
+      "../browser-extension/icons/**/*": "browser-extension/icons/",
+      "../browser-extension/popup/**/*": "browser-extension/popup/"
+    },
+    "windows": {
+      "nsis": {
+        "installMode": "currentUser"
+      }
+    }
   }
 }

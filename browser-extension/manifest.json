@@ -1,5 +1,6 @@
 {
   "manifest_version": 3,
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAlQ4DLA6bCUR90cXiJfZcq1qkj4sdWpvdM7zn2duHxK/2clNagUEUgMtoOrarTPAwWdVGLs4SRAR5kg5TuJJ9lqnT7HpWsVH4aBZugAZkPbAyMevNsl8fj78ESWa9k29ZuE8Ka0ivoLVkHQHJPnaadTMmVtUV+oNYGVaHoFrA/2c2Ys0YLcLDckP3Nv1xb/eycz+Rk7D1rIZtiwJlykBfeUzXuLHJzalCHaQAx054TESP7YcVzUF/Ue4LFL2OFVcBm3U13Ru6Pf5q2czpZWso/q9ay9Lfi12UUOFUlSq+Qcym+2mhK5qdLewAqQoX9dVsuYJVpEi3SdRKBNAv1qPU/wIDAQAB",
   "name": "ResiTailor Extractor",
   "version": "1.0.0",
   "description": "One-click job posting extractor",

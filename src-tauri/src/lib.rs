@@ -21,6 +21,10 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![
             commands::ping,
+            commands::get_setup_status,
+            commands::save_openai_api_key,
+            commands::delete_openai_api_key,
+            commands::open_extension_directory,
             commands::get_latest_job,
             commands::clear_latest_job,
             commands::get_latest_pipeline_result,
@@ -43,6 +47,7 @@ pub fn run() {
             commands::reveal_result_artifact
         ])
         .setup(|app| {
+            config::initialize_runtime(app)?;
             // Auto-open DevTools in debug builds
             #[cfg(debug_assertions)]
             {

@@ -409,6 +409,44 @@ npm run dev:desktop
 when both are set. The release build does not load `.env`; the packaged app will use
 an in-app Settings flow backed by the operating system's secure credential store.
 
+### Private Windows installer
+
+Release builds are independent of the repository directory. Required resume content,
+locked snapshots, templates, the rendering script, and the browser extension are bundled as
+Tauri resources. On first launch the app initializes a writable workspace under Windows Local
+AppData. Captures, evidence changes, variants, results, and API usage receipts remain there
+across upgrades.
+
+The OpenAI key is never compiled into the executable or copied into a release. Expand
+**App setup**, enter the key once, and the Rust backend stores it in Windows Credential
+Manager. The UI only receives whether a key exists, never the saved value.
+
+LibreOffice remains a separate prerequisite because it performs PDF export and the one-page
+fit check. ResiTailor detects it before making a paid analysis or tailoring call and asks you
+to install it if it is missing.
+
+To install the bundled Chrome/Edge extension, expand **App setup**, choose **Open extension
+folder**, enable Developer Mode at `chrome://extensions` or `edge://extensions`, choose
+**Load unpacked**, and select that folder. URL and pasted-text import do not require it.
+
+Build an unsigned per-user NSIS installer locally with:
+
+```powershell
+npm ci
+npm test
+Push-Location src-tauri; cargo test; Pop-Location
+npm run build:desktop
+```
+
+The installer appears under `src-tauri/target/release/bundle/nsis/`. Windows will display an
+Unknown Publisher/SmartScreen warning until commercial code signing is added.
+
+For a downloadable private build, keep the GitHub repository private and run the
+**Private Windows release** workflow manually with a new `vX.Y.Z` tag. The workflow refuses
+to publish if repository visibility is not private, runs both test suites, builds the installer,
+and attaches it plus a SHA-256 checksum to a private GitHub release. No OpenAI secret is used
+by the workflow. Updates are manual: download and run the newer installer.
+
 ## AI Models
 
 - `OPENAI_API_KEY` is required for both AI stages.
